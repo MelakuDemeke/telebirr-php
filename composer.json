@@ -1,11 +1,11 @@
 {
-    "name": "melaku/telebirr-php",
-    "description": "Telebirr library for php",
+    "name": "melaku/telebirr",
+    "description": "a telebirr library for php",
     "type": "library",
     "license": "MIT",
     "autoload": {
         "psr-4": {
-            "Melaku\\TelebirrPhp\\": "src/"
+            "Melaku\\Telebirr\\": "src/"
         }
     },
     "authors": [

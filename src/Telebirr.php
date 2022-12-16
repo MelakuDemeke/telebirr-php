@@ -32,9 +32,8 @@ class Telebirr
 	private $receiveName;
 	private $totalAmount;
 	private $subject;
-	private $nonce = time();
-	private $str = rand();
-	private $result = md5($str);
+	private $nonce;
+	private $result;
 
 	function __construct(
 		$publicKey,
@@ -47,7 +46,9 @@ class Telebirr
 		$timeoutExpress,
 		$receiveName,
 		$totalAmount,
-		$subject
+		$subject,
+		$nonce,
+		$result
 	)
 	{
 		$this->publicKey = $publicKey;
@@ -61,6 +62,8 @@ class Telebirr
 		$this->receiveName = $receiveName;
 		$this->totalAmount = $totalAmount;
 		$this->subject = $subject;
+		$this->nonce = $nonce;
+		$this->result =$result;
 	}
 
 	/**
@@ -72,13 +75,13 @@ class Telebirr
 		$data = [
 			'outTradeNo' => $this->result,
 			'subject' => $this->subject,
-			'totalAmount' => $this->amount,
+			'totalAmount' => $this->totalAmount,
 			'shortCode' => $this->shortCode,
 			'notifyUrl' => $this->notifyUrl,
 			'returnUrl' => $this->returnUrl,
-			'receiveName' => $this->reciver,
+			'receiveName' => $this->receiveName,
 			'appId' => $this->appId,
-			'timeoutExpress' => $this->timeOut,
+			'timeoutExpress' => $this->timeoutExpress,
 			'nonce' => $this->result,
 			'timestamp' => $this->nonce,
 			'appKey' => $this->appKey
@@ -117,11 +120,6 @@ class Telebirr
 		curl_setopt($curl, CURLOPT_HTTPHEADER, $headers);
 		
 		$data = json_encode($requestMessage);
-		echo '<br>';
-		print_r($data);
-		
-		//echo $data;
-		
 		curl_setopt($curl, CURLOPT_POSTFIELDS, $data);
 		
 		//for debug only!
@@ -134,7 +132,6 @@ class Telebirr
 		
 		
 		$decode = json_decode($resp, true);
-		print_r($decode);
 		$topayUrl = $decode['data']['toPayUrl'];
 		
 		return $topayUrl;
