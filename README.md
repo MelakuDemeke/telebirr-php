@@ -15,6 +15,7 @@
 ![GitHub Repo stars](https://img.shields.io/github/stars/MelakuDemeke/telebirr-php?logo=github&style=flat)
 ![GitHub forks](https://img.shields.io/github/forks/MelakuDemeke/telebirr-php?logo=github&style=falt)
 ![GitHub commit activity](https://img.shields.io/github/commit-activity/m/MelakuDemeke/telebirr-php?logo=github)
+![GitHub last commit](https://img.shields.io/github/last-commit/MelakuDemeke/telebirr-php)
 ## doc will be added soon
 ### after payment decode willbe added soon!
 # Requirements
