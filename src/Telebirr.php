@@ -32,8 +32,7 @@ class Telebirr
 	private $receiveName;
 	private $totalAmount;
 	private $subject;
-	private $nonce;
-	private $result;
+
 
 	function __construct(
 		$publicKey,
@@ -46,9 +45,7 @@ class Telebirr
 		$timeoutExpress,
 		$receiveName,
 		$totalAmount,
-		$subject,
-		$nonce,
-		$result
+		$subject
 	)
 	{
 		$this->publicKey = $publicKey;
@@ -62,8 +59,6 @@ class Telebirr
 		$this->receiveName = $receiveName;
 		$this->totalAmount = $totalAmount;
 		$this->subject = $subject;
-		$this->nonce = $nonce;
-		$this->result =$result;
 	}
 
 	/**
@@ -72,8 +67,12 @@ class Telebirr
 
 	public function getPyamentUrl()
 	{
+		$nonce = time();
+		$str = rand();
+		$result = md5($str);
+
 		$data = [
-			'outTradeNo' => $this->result,
+			'outTradeNo' => $result,
 			'subject' => $this->subject,
 			'totalAmount' => $this->totalAmount,
 			'shortCode' => $this->shortCode,
@@ -82,8 +81,8 @@ class Telebirr
 			'receiveName' => $this->receiveName,
 			'appId' => $this->appId,
 			'timeoutExpress' => $this->timeoutExpress,
-			'nonce' => $this->result,
-			'timestamp' => $this->nonce,
+			'nonce' => $result,
+			'timestamp' => $nonce,
 			'appKey' => $this->appKey
 		];
 
