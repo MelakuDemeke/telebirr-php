@@ -16,12 +16,15 @@
 ![GitHub forks](https://img.shields.io/github/forks/MelakuDemeke/telebirr-php?logo=github&style=falt)
 ![GitHub commit activity](https://img.shields.io/github/commit-activity/m/MelakuDemeke/telebirr-php?logo=github)
 ![GitHub last commit](https://img.shields.io/github/last-commit/MelakuDemeke/telebirr-php)
-## doc will be added soon
-### after payment decode willbe added soon!
+
+Telebirr-Php is a php library for [telebirr](https://www.ethiotelecom.et/telebirr/).  
+Telebirr is a mobile money service developed by Huawei that is owned and was launched by Ethio telecom.  
+This library will help you by providing an easy integration method so you can focus on your main task
+
 # Requirements
 - PHP >= 5.3.7
 - cURL Extension
-
+- 
 # Installation
 ``` 
 composer require melaku/telebirr 
@@ -29,3 +32,4 @@ composer require melaku/telebirr
 
 # Usage
 ... comming soon!
+### after payment decode willbe added soon!
