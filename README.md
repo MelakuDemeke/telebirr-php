@@ -1,4 +1,10 @@
+<a href="https://aimeos.org/">
+    <img src="img/telebirrlogo.png" alt="Telebirr" title="Aimeos" align="right" height="60" />
+</a>
+
+
 # Telebirr Php library v 0.1
+![](img/telebanner.png)
 ## doc will be added soon
 ### after payment decode willbe added soon!
 # Requirements
@@ -6,7 +12,9 @@
 - cURL Extension
 
 # Installation
-``` composer require melaku/telebirr ```
+``` 
+composer require melaku/telebirr 
+```
 
 # Usage
 ... comming soon!
