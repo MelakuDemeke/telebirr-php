@@ -99,11 +99,13 @@ require 'vendor/autoload.php';
       );
     ```
 - step 4 get the payment url
+
   - ```PHP
       var_dump($pay1->getPyamentUrl());
     ```
   - this will return payment url like `http://196.188.120.3:11443/ammwebpay/#/?transactionNo=123456789` the transaction number `123456789` is used for example yours will be different
   - after this you are required to redirect your header to the payurl
+
     - ```PHP
         header("Location:" . $pay1->getPyamentUrl());
       ```
@@ -111,6 +113,7 @@ require 'vendor/autoload.php';
   
 ### Decrypt payment data 
 - step 1 define public key and data received form telebirr
+
   - ```PHP
       $PUBLICKEY = "YOUR PUBLIC KEY";
       $data = "DATA RECIVED FROM TEELEBIRR VIA NOTIFY URL";
@@ -118,18 +121,22 @@ require 'vendor/autoload.php';
     - explanation
       - `PUBLICKEY` - is the same as the public key defined during payment initialization
       - `data` -  is the data received from telebirr from the notify URL, your notify URL should accept plain text not JSON, you can get incoming data by using ⬇️
+
         - ```PHP
             $data = file_get_contents('php://input');
           ```
 - step 2  Create a new object of Notify class with `$PUBLICKEY` and `$data`
+
   - ```PHP
     $result = new \Melaku\Telebirr\Notify($PUBLICKEY,$data);
     ```
   - to get the payment result call `getPaymentInfo()`
+
     - ```PHP
       var_dump($result->getPaymentInfo());
       ```
   - The `getPaymentInfo()` will return a json data like ⬇️
+
     - ```JSON
       {
         "msisdn":"251900000032",
