@@ -38,4 +38,45 @@ composer require melaku/telebirr
 
 ## Usage
 
-### after payment decode willbe added soon!
+### Required information's
+you will receive the required information from Tele with information which looks like theis :arrow_down:
+
+| merchant name   | short code   |  APP ID | APP KEY  |  Public ID | H5  | InApp Payment   |
+|---|---|---|---|---|---|---|
+| owner name  | 6-digit code  | 32-character Id  | 32-character key  | 392-character public key  | web payment url  | mobile payment url  |
+
+you should store those information in your development environment like `.env` file
+
+### General setup
+you should always require the composer autoload
+```PHP
+require 'vendor/autoload.php';
+```
+
+### To initialize payment
+
+- step 1 Initialize the information from Telebirr in variable
+  - ```PHP
+      $PUBLICKEY = "YOUR PUBLIC KEY";
+      $APPKEY = "YOUR APP KEY";
+      $APPID = "YOUR APP ID";
+      $SHORTCODE = "YOUR SHORT CODE";
+      $API = "YOUR WEBPAY URL";
+    ```
+- step 2 Initialize information from your side in a variable
+  - ```PHP
+      $NOTIFYURL = "http://YOUR/NOTIFY/URL";
+      $RETURNURL = "http://YOUR/RERURN/URL";
+      $TIMEOUT = '30';
+      $RECIVER = "COMPANY NAME";
+      $totalAmount = 3;
+      $subject = "REASON FOR PAYMENT";
+    ```
+  - explanation
+    - `NOTIFYURL` - is the URL that will receive the payment status from telebirr and is responsible for updating your Database
+    - `RETURNURL` - the URL that will be returned after payment usually it is the checkout screen
+    - `TIMEOUT` - payment timeout, it is set 30 seconds by default
+    - `RECIVER` - the company that will receive the payment
+    - `totalAmount` - is the amount that should be paid, this information usually comes from POST so assign the value accordingly
+    - `subject` - it is the reason for payment, eg. book purchase
+
