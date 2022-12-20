@@ -27,7 +27,7 @@ This library will help you by providing an easy integration method so you can fo
   - [Composer](#composer)
 - [Usage](#usage)
 ## Requirements
-- PHP >= 5.3.7
+- PHP >= 7.4.0
 - cURL Extension
 - 
 ## Installation
