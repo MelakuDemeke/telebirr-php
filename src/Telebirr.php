@@ -4,60 +4,15 @@ namespace Melaku\Telebirr;
 
 use Melaku\Telebirr\Utils\Tool;
 
-/**
- * Main Telebirr class for handling payments.
- */
+
 class Telebirr
 {
-    /**
-     * The base URL for the Telebirr API.
-     *
-     * @var string
-     */
     private $baseUrl;
-
-    /**
-     * The Fabric App ID provided by Telebirr.
-     *
-     * @var string
-     */
     private $fabricAppId;
-
-    /**
-     * The App Secret provided by Telebirr.
-     *
-     * @var string
-     */
     private $appSecret;
-
-    /**
-     * The Merchant App ID provided by Telebirr.
-     *
-     * @var string
-     */
     private $merchantAppId;
-
-    /**
-     * The Merchant Code provided by Telebirr.
-     *
-     * @var string
-     */
     private $merchantCode;
-
-    /**
-     * The public key for signing requests.
-     *
-     * @var string
-     */
-    private $publicKey;
-
-    /**
-     * The private key for signing requests.
-     *
-     * @var string
-     */
     private $privateKey;
-
 
     /**
      * Telebirr constructor.
@@ -71,9 +26,33 @@ class Telebirr
         $this->appSecret = $config['appSecret'];
         $this->merchantAppId = $config['merchantAppId'];
         $this->merchantCode = $config['merchantCode'];
-        $this->publicKey = $config['publicKey'];
-        $this->privateKey = $config['privateKey'];
+
+        // The private key handler automatically formats the key.
+        $this->privateKey = $this->formatPrivateKey($config['privateKey']);
     }
+
+    /**
+     * Formats the private key by wrapping it if necessary.
+     *
+     * This allows users to provide either the raw key string or the full PEM formatted key.
+     *
+     * @param string $privateKey The private key string.
+     * @return string The PEM-formatted private key.
+     */
+    private function formatPrivateKey($privateKey)
+    {
+        // Trim whitespace from the key
+        $trimmedKey = trim($privateKey);
+
+        // Check if the key is already in the correct PEM format
+        if (strpos($trimmedKey, '-----BEGIN PRIVATE KEY-----') === 0) {
+            return $trimmedKey;
+        }
+
+        // If not, wrap the raw key in the required PEM headers
+        return "-----BEGIN PRIVATE KEY-----\n" . $trimmedKey . "\n-----END PRIVATE KEY-----";
+    }
+
 
     /**
      * Get a new instance of the Tool class.
@@ -153,8 +132,6 @@ class Telebirr
             'version' => '1.0',
         ];
 
-        // --- This is the updated, flexible part ---
-        // Set default values for the biz_content
         $bizDefaults = [
             'business_type' => 'BuyGoods',
             'trade_type' => 'InApp',
@@ -165,10 +142,8 @@ class Telebirr
             'payee_identifier' => $this->merchantCode,
         ];
 
-        // Merge user-provided data with defaults. User data will overwrite defaults.
         $bizContent = array_merge($bizDefaults, $orderData);
 
-        // Build the final biz_content object
         $biz = [
             'appid' => $this->merchantAppId,
             'merch_code' => $this->merchantCode,
@@ -185,11 +160,9 @@ class Telebirr
             'payee_type' => $bizContent['payee_type'],
         ];
 
-        // Add optional redirect_url if the user provided it
         if (isset($bizContent['redirect_url'])) {
             $biz['redirect_url'] = $bizContent['redirect_url'];
         }
-        // --- End of updated section ---
 
         $req['biz_content'] = $biz;
         $req['sign_type'] = 'SHA256WithRSA';
