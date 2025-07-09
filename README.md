@@ -1,9 +1,9 @@
-<a href="https://aimeos.org/">
-    <img src="img/telebirrlogo.png" alt="Telebirr" title="Aimeos" align="right" height="60" />
+<a href="melaku.me">
+    <img src="img/telebirrlogo.png" alt="Telebirr" title="Melaku" align="right" height="60" />
 </a>
 
 
-# Telebirr Php library v 0.1
+# Telebirr Php library v 1.0
 ![](img/telebanner.png)
 
 ![GitHub branch checks state](https://img.shields.io/github/checks-status/MelakuDemeke/telebirr-php/main)
@@ -23,128 +23,139 @@ This library will help you by providing an easy integration method so you can fo
 
 ## Table of content
 
-- [Telebirr Php library v 0.1](#telebirr-php-library-v-01)
+- [Telebirr Php library v 1.0](#telebirr-php-library-v-10)
   - [Table of content](#table-of-content)
+- [Telebirr PHP Library v1.0](#telebirr-php-library-v10)
   - [Installation](#installation)
-    - [Composer](#composer)
+  - [Configuration](#configuration)
   - [Usage](#usage)
-    - [Required information's](#required-informations)
-    - [General setup](#general-setup)
-    - [To initialize payment](#to-initialize-payment)
-    - [Decrypt payment data](#decrypt-payment-data)
+    - [1. Creating a Web Checkout Payment](#1-creating-a-web-checkout-payment)
+    - [2. Creating an In-App SDK Payment](#2-creating-an-in-app-sdk-payment)
+
+# Telebirr PHP Library v1.0
+
+Telebirr-Php is a modern PHP library for integrating with the [Telebirr](https://www.ethiotelecom.et/telebirr/) payment gateway. This library simplifies the entire payment process, including creating web and in-app orders, and securely verifying payment notifications.
+
 ## Installation
-### Composer
-``` 
-composer require melaku/telebirr 
+
+The recommended way to install the library is through [Composer](https://getcomposer.org/).
+
+```bash
+composer require melaku/telebirr
+```
+
+The library requires the following PHP extensions:
+
+  - `php: >=7.4.0`
+  - `ext-curl`
+  - `ext-json`
+  - `ext-openssl`
+
+## Configuration
+
+Before using the library, you need to set up your credentials. The recommended way is to create a `config.php` file that returns an array with your settings.
+
+Create a `config.php` file:
+
+```php
+<?php
+// config.php
+
+return [
+    // --- Your Merchant Credentials ---
+    'baseUrl'       => 'https://196.188.120.3:38443/apiaccess/payment/gateway',
+    'fabricAppId'   => 'YOUR_FABRIC_APP_ID',
+    'appSecret'     => 'YOUR_APP_SECRET',
+    'merchantAppId' => 'YOUR_MERCHANT_APP_ID',
+    'shortCode'     => 'YOUR_MERCHANT_SHORT_CODE',
+
+    /**
+     * --- Your Private Key ---
+     * This is the private key you recived from telebirr. The library can accept it
+     * as a raw string or with the PEM headers.
+     *
+     * Option 1: Load from a file (Recommended)
+     * 'privateKey' => file_get_contents(__DIR__ . '/private_key.pem'),
+     *
+     * Option 2: As a raw string from an environment variable
+     * 'privateKey' => 'YOUR_RAW_PRIVATE_KEY_STRING',
+     */
+    'privateKey'    => file_get_contents(__DIR__ . '/private_key.pem'),
+
+];
 ```
 
 ## Usage
 
-### Required information's
-you will receive the required information from Tele with information which looks like theis :arrow_down:
+Always include the Composer autoloader at the top of your script:
 
-| merchant name   | short code   |  APP ID | APP KEY  |  Public ID | H5  | InApp Payment   |
-|---|---|---|---|---|---|---|
-| owner name  | 6-digit code  | 32-character Id  | 32-character key  | 392-character public key  | web payment url  | mobile payment url  |
+```php
+require_once __DIR__ . '/vendor/autoload.php';
 
-you should store those information in your development environment like `.env` file
-
-### General setup
-you should always require the composer autoload
-```PHP
-require 'vendor/autoload.php';
+use Melaku\Telebirr\Telebirr;
 ```
 
-### To initialize payment
+### 1\. Creating a Web Checkout Payment
 
-- step 1 Initialize the information from Telebirr in variable
-  - ```PHP
-      $PUBLICKEY = "YOUR PUBLIC KEY";
-      $APPKEY = "YOUR APP KEY";
-      $APPID = "YOUR APP ID";
-      $SHORTCODE = "YOUR SHORT CODE";
-      $API = "YOUR WEBPAY URL";
-    ```
-- step 2 Initialize information from your side in a variable
-  - ```PHP
-      $NOTIFYURL = "http://YOUR/NOTIFY/URL";
-      $RETURNURL = "http://YOUR/RERURN/URL";
-      $TIMEOUT = '30';
-      $RECIVER = "COMPANY NAME";
-      $totalAmount = 3;
-      $subject = "REASON FOR PAYMENT";
-    ```
-  - explanation
-    - `NOTIFYURL` - is the URL that will receive the payment status from telebirr and is responsible for updating your Database
-    - `RETURNURL` - the URL that will be returned after payment usually it is the checkout screen
-    - `TIMEOUT` - payment timeout, it is set 30 seconds by default
-    - `RECIVER` - the company that will receive the payment
-    - `totalAmount` - is the amount that should be paid, this information usually comes from POST so assign the value accordingly
-    - `subject` - it is the reason for payment, eg. book purchase
-  
-- step 3  Create a new object of Telebirr class with all informations
-  - ```PHP
-      $pay1 = new Melaku\Telebirr\Telebirr(
-        $PUBLICKEY,
-        $APPKEY,
-        $APPID,
-        $API,
-        $SHORTCODE,
-        $NOTIFYURL, 
-        $RETURNURL,
-        $TIMEOUT,
-        $RECIVER,
-        $totalAmount,
-        $subject,
-      );
-    ```
-- step 4 get the payment url
+This is used to generate a payment URL for a standard web-based checkout flow.
 
-  - ```PHP
-      var_dump($pay1->getPyamentUrl());
-    ```
-  - this will return payment url like `http://196.188.120.3:11443/ammwebpay/#/?transactionNo=123456789` the transaction number `123456789` is used for example yours will be different
-  - after this you are required to redirect your header to the payurl
+```php
+<?php
+require_once __DIR__ . '/vendor/autoload.php';
+use Melaku\Telebirr\Telebirr;
 
-    - ```PHP
-        header("Location:" . $pay1->getPyamentUrl());
-      ```
-    - this will forward you to the payment screen
-  
-### Decrypt payment data 
-- step 1 define public key and data received form telebirr
+// Load configuration
+$config = require __DIR__ . '/config.php';
+$telebirr = new Telebirr($config);
 
-  - ```PHP
-      $PUBLICKEY = "YOUR PUBLIC KEY";
-      $data = "DATA RECIVED FROM TEELEBIRR VIA NOTIFY URL";
-    ```
-    - explanation
-      - `PUBLICKEY` - is the same as the public key defined during payment initialization
-      - `data` -  is the data received from telebirr from the notify URL, your notify URL should accept plain text not JSON, you can get incoming data by using ⬇️
+// Prepare order data
+$orderData = [
+    'title'      => 'Online Store Purchase',
+    'amount'     => '150.75',
+    'notify_url' => 'https://yourdomain.com/notify.php',
+    'trade_type' => 'Checkout', // Use 'Checkout' for web payments
+];
 
-        - ```PHP
-            $data = file_get_contents('php://input');
-          ```
-- step 2  Create a new object of Notify class with `$PUBLICKEY` and `$data`
+// Create the order
+$result = $telebirr->createOrder($orderData);
 
-  - ```PHP
-    $result = new \Melaku\Telebirr\Notify($PUBLICKEY,$data);
-    ```
-  - to get the payment result call `getPaymentInfo()`
+if (is_string($result) && strpos($result, 'prepay_id') !== false) {
+    // Build the full payment URL
+    $paymentUrl = 'https://developerportal.ethiotelebirr.et:38443/payment/web/paygate?' . $result . '&version=1.0&trade_type=Checkout';
+    
+    // Redirect the user to the payment page
+    header("Location: " . $paymentUrl);
+    exit;
+} else {
+    // Handle error
+    var_dump($result);
+}
+```
 
-    - ```PHP
-      var_dump($result->getPaymentInfo());
-      ```
-  - The `getPaymentInfo()` will return a json data like ⬇️
+### 2\. Creating an In-App SDK Payment
 
-    - ```JSON
-      {
-        "msisdn":"251900000032",
-        "outTradeNo":"15380eaea1405302ee0821b62546682c",
-        "totalAmount":"10",
-        "tradeDate":1670051315108,
-        "tradeNo":"202212031008041598937091913756674",
-        "tradeStatus":2,
-        "transactionNo":"9L360NSV4U"
-      }
-      ```
+This is used when your mobile app's SDK needs to initiate a payment. The process returns a `receiveCode` that you must send to the mobile app.
+
+```php
+<?php
+require_once __DIR__ . '/vendor/autoload.php';
+use Melaku\Telebirr\Telebirr;
+
+// Load configuration
+$config = require __DIR__ . '/config.php';
+$telebirr = new Telebirr($config);
+
+// Prepare order data
+$orderData = [
+    'title'      => 'InApp Item Purchase',
+    'amount'     => '25.00',
+    'notify_url' => 'https://yourdomain.com/notify.php',
+];
+
+// Create the In-App order
+$response = $telebirr->createInAppOrder($orderData);
+
+// Send the JSON response to your mobile application
+header('Content-Type: application/json');
+echo json_encode($response);
+```
