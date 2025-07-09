@@ -48,9 +48,8 @@ class Telebirr
             'trade_type' => 'InApp',
             'appid' => $this->config->getMerchantAppId(),
             'merch_code' => $this->config->getShortCode(),
-            'merch_order_id' => '1752073443', // Hardcoded from your log
+            'merch_order_id' => (string)time(),
             'title' => $title,
-            // --- THIS IS THE CRITICAL FIX ---
             'total_amount' => number_format($amount, 2, '.', ''), // Sending as a STRING "1.00"
             'trans_currency' => 'ETB',
             'timeout_express' => '120m',
@@ -62,45 +61,100 @@ class Telebirr
         ];
 
         $payload = [
-            'nonce_str' => 'fcab0d2949e64a69a212aa83eab6ee1d', // Hardcoded from your log
+            'nonce_str' => $this->generateNonceStr(),
             'method' => 'payment.preorder',
-            'timestamp' => '1752073443', // Hardcoded from your log
+            'timestamp' => (string)time(),
             'version' => '1.0',
             'biz_content' => $bizContent,
         ];
 
         $payload['sign'] = $this->sign($payload);
         $payload['sign_type'] = 'SHA256WithRSA';
-        
+        echo "\n📦 Payload:\n" . json_encode($payload, JSON_PRETTY_PRINT) . "\n";
+
         return $this->sendRequest($url, json_encode($payload), $headers);
     }
 
-    private function buildH5RawRequestUrl(string $prepayId): string { /* ... */ return ""; }
+    private function buildH5RawRequestUrl(string $prepayId): string
+    {
+        $params = [
+            "appid" => $this->config->getMerchantAppId(),
+            "merch_code" => $this->config->getShortCode(),
+            "nonce_str" => $this->generateNonceStr(),
+            "prepay_id" => $prepayId,
+            "timestamp" => time(),
+            "sign_type" => "SHA256WithRSA",
+        ];
 
-    private function sign(array $data): string {
-        if (isset($data['biz_content']) && is_array($data['biz_content'])) {
-            $data = array_merge($data, $data['biz_content']);
-            unset($data['biz_content']);
-        }
-        unset($data['sign'], $data['sign_type']);
-        $stringToBuild = '';
-        foreach ($data as $key => $value) {
-            if ($value !== '' && !is_null($value)) {
-                $stringToBuild .= "{$key}={$value}&";
+        $params['sign'] = $this->sign($params);
+
+        return $this->config->getH5CheckoutUrl() . http_build_query($params);
+    }
+
+    private function sign(array $request): string
+    {
+        $flat = [];
+
+        // Merge biz_content into root
+        foreach ($request as $key => $value) {
+            if (in_array($key, ['sign', 'sign_type', 'header', 'refund_info', 'openType', 'raw_request'])) {
+                continue;
+            }
+
+            if ($key === 'biz_content' && is_array($value)) {
+                foreach ($value as $k => $v) {
+                    $flat[$k] = ($k === 'total_amount') ? number_format((float)$v, 2, '.', '') : $v;
+                }
+            } else {
+                $flat[$key] = $value;
             }
         }
-        $stringToBuild = rtrim($stringToBuild, '&');
-        $sortedArray = explode('&', $stringToBuild);
-        sort($sortedArray);
-        $stringToSign = implode('&', $sortedArray);
-        $pkey = openssl_pkey_get_private("-----BEGIN PRIVATE KEY-----\n" . wordwrap($this->config->getPrivateKey(), 64, "\n", true) . "\n-----END PRIVATE KEY-----");
-        if (!$pkey) throw new TelebirrException('Invalid private key provided.');
-        openssl_sign($stringToSign, $signature, $pkey, OPENSSL_ALGO_SHA256);
+
+        // Sort the flat map
+        ksort($flat);
+
+        // Build the query string
+        $stringToSign = urldecode(http_build_query($flat));
+
+        echo "\n🔐 String to Sign:\n" . $stringToSign . "\n";
+
+        return $this->signWithRSA($stringToSign);
+    }
+
+    private function signWithRSA(string $data): string
+    {
+        $privateKey = $this->config->getPrivateKey();
+        $privateKey = $this->trimPrivateKey($privateKey);
+
+        $pkey = openssl_pkey_get_private($privateKey);
+        if (!$pkey) {
+            throw new TelebirrException("Failed to load private key.");
+        }
+
+        $signature = '';
+        $ok = openssl_sign($data, $signature, $pkey, OPENSSL_ALGO_SHA256);
         openssl_free_key($pkey);
+
+        if (!$ok) {
+            throw new TelebirrException("Failed to generate signature using OpenSSL.");
+        }
+
         return base64_encode($signature);
     }
 
-    private function sendRequest(string $url, string $payload, array $headers): array {
+    private function trimPrivateKey(string $key): string
+    {
+        // same as in tool.php from Telebirr sample
+        if (strpos($key, 'BEGIN PRIVATE KEY') === false) {
+            return "-----BEGIN PRIVATE KEY-----\n" .
+                wordwrap($key, 64, "\n", true) .
+                "\n-----END PRIVATE KEY-----";
+        }
+        return $key;
+    }
+
+    private function sendRequest(string $url, string $payload, array $headers): array
+    {
         $ch = curl_init();
         curl_setopt($ch, CURLOPT_URL, $url);
         curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
@@ -111,15 +165,26 @@ class Telebirr
         curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
         $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+        echo "\n🧪 Raw Response:\n$response\n";
+
+        if (curl_errno($ch)) throw new TelebirrException('cURL Error: ' . curl_error($ch));
+
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         if (curl_errno($ch)) throw new TelebirrException('cURL Error: ' . curl_error($ch));
         curl_close($ch);
         $decodedResponse = json_decode($response, true);
         if ($decodedResponse === null && !empty($response)) {
-             throw new TelebirrException('API did not return valid JSON. Response: ' . $response, $httpCode);
+            throw new TelebirrException('API did not return valid JSON. Response: ' . $response, $httpCode);
         }
         if ($httpCode >= 400 || (isset($decodedResponse['code']) && $decodedResponse['code'] != '0' && $decodedResponse['code'] != '200')) {
             throw new TelebirrException('Telebirr API Error: ' . ($decodedResponse['msg'] ?? 'Unknown error'), $httpCode);
         }
         return $decodedResponse;
+    }
+
+    private function generateNonceStr(): string
+    {
+        return bin2hex(random_bytes(16));
     }
 }
