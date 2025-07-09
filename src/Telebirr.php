@@ -184,7 +184,7 @@ class Telebirr
             'payee_identifier_type' => $bizContent['payee_identifier_type'],
             'payee_type' => $bizContent['payee_type'],
         ];
-        
+
         // Add optional redirect_url if the user provided it
         if (isset($bizContent['redirect_url'])) {
             $biz['redirect_url'] = $bizContent['redirect_url'];
