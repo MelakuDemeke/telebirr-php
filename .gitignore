@@ -22,6 +22,5 @@ test.php
 .DS_Store
 Thumbs.db
 
-test.php
-test2.php
-config.php
+# custom ignores
+/loctest
