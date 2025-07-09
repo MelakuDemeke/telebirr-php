@@ -1,3 +1,27 @@
+# Dependencies managed by Composer
 /vendor/
+/config/env.php
+composer.phar
+*.phar
+
+*.log
+logs/
+
+temp/
+cache/
+
+# IDE and editor configuration files
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+test.php
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+
 test.php
 test2.php
+config.php
