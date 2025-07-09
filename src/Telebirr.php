@@ -12,7 +12,7 @@ class Telebirr
     }
 
     /**
-     * Main public method that orchestrates the entire H5 payment flow.
+     * The main public method that orchestrates the entire H5 payment flow.
      */
     public function getH5CheckoutUrl(string $title, float $amount, string $notifyUrl, string $returnUrl, string $orderId): string
     {
@@ -28,7 +28,7 @@ class Telebirr
         return $this->buildH5RawRequestUrl($prepayId);
     }
 
-    private function getFabricToken(): array
+    public function getFabricToken(): array
     {
         $url = $this->config->getApiBaseUrl() . '/payment/v1/token';
         $headers = ['Content-Type: application/json', 'X-APP-Key: ' . $this->config->getFabricAppId()];
