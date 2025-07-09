@@ -24,3 +24,4 @@ Thumbs.db
 
 # custom ignores
 /loctest
+/progress.text
