@@ -118,7 +118,7 @@ class Telebirr
     }
 
     /**
-     * Creates a new order.
+     * Creates a new order for web-based checkout.
      *
      * @param array $orderData The data for the order. This now accepts all biz_content fields.
      * @return string|array The raw request string for redirection on success, or an error array on failure.
@@ -151,6 +151,43 @@ class Telebirr
 
         return $this->createRawRequest($prepayId, $tool);
     }
+
+    /**
+     * Creates a new order for In-App SDK payments.
+     *
+     * @param array $orderData The data for the order.
+     * @return array The full response from the API, which includes the 'receiveCode' needed by the mobile SDK.
+     */
+    public function createInAppOrder(array $orderData)
+    {
+        $tool = $this->getTool();
+        $tokenData = $this->applyFabricToken();
+        if (!isset($tokenData['token']) || empty($tokenData['token'])) {
+            return $tokenData;
+        }
+
+        $fabricToken = $tokenData['token'];
+        $url = $this->baseUrl . '/payment/v1/inapp/createOrder';
+        $headers = [
+            'Content-Type: application/json',
+            'X-APP-Key: ' . $this->fabricAppId,
+            'Authorization: ' . $fabricToken,
+        ];
+
+        // Ensure the trade_type is set to 'InApp' for this flow
+        $orderData['trade_type'] = 'InApp';
+
+        $requestData = $this->createRequestObject($orderData, $tool);
+        $response = $tool->sendRequest($url, $requestData, $headers);
+        $decodedResponse = json_decode($response, true);
+
+        if (json_last_error() !== JSON_ERROR_NONE && !isset($decodedResponse['biz_content']['receiveCode'])) {
+            return ['error' => 'Failed to get receiveCode from in-app order response.', 'raw_response' => $response];
+        }
+
+        return $decodedResponse;
+    }
+
 
     /**
      * Creates the request object for creating an order.

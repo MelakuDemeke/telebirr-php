@@ -1,6 +1,7 @@
 <?php
 
 namespace Melaku\Telebirr\Utils;
+
 use phpseclib3\Crypt\RSA;
 
 /**
@@ -8,11 +9,7 @@ use phpseclib3\Crypt\RSA;
  */
 class Tool
 {
-    /**
-     * The private key for signing requests.
-     *
-     * @var string
-     */
+    /** @var string The merchant's private key for signing requests. */
     private $privateKey;
 
     /**
@@ -31,7 +28,7 @@ class Tool
      * @param string $url The URL to send the request to.
      * @param mixed  $data The data to send with the request.
      * @param array  $headers The headers to send with the request.
-     * @return bool|string The response from the server.
+     * @return bool|string The response from the server, or a JSON error string on cURL failure.
      */
     public function sendRequest($url, $data, $headers)
     {
@@ -41,15 +38,25 @@ class Tool
         curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 15); // Connection timeout
+        curl_setopt($ch, CURLOPT_TIMEOUT, 40);      // Total request timeout
         // For development environment only, disable SSL verification
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, 0);
         curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
 
-        $server_output = curl_exec($ch);
-        curl_close($ch);
-        return $server_output;
-    }
+        $response = curl_exec($ch);
 
+        // Check for cURL errors and return a detailed error message
+        if ($response === false) {
+            $errorMessage = 'cURL Error: ' . curl_error($ch) . ' (Code: ' . curl_errno($ch) . ')';
+            curl_close($ch);
+            // Return a JSON string with the error, so the calling function can decode it.
+            return json_encode(['error' => 'CURL_REQUEST_FAILED', 'message' => $errorMessage]);
+        }
+
+        curl_close($ch);
+        return $response;
+    }
 
     /**
      * Signs the given data using RSA with SHA256.
@@ -124,8 +131,6 @@ class Tool
             $signature = $private->sign($data);
             return base64_encode($signature);
         } catch (\Exception $e) {
-            // In a real application, you should log the error message.
-            // For example: error_log('Error signing data: ' . $e->getMessage());
             return "Error signing data.";
         }
     }
