@@ -1,8 +1,6 @@
 <?php
 
 namespace Melaku\Telebirr\Utils;
-
-// Ensure you have phpseclib installed: composer require phpseclib/phpseclib
 use phpseclib3\Crypt\RSA;
 
 /**
@@ -85,10 +83,10 @@ class Tool
             if (is_array($values)) {
                 ksort($values);
                 foreach ($values as $valueKey => $single_value) {
-                     $stringApplet .= ($stringApplet == '') ? "$valueKey=$single_value" : "&$valueKey=$single_value";
+                    $stringApplet .= ($stringApplet == '') ? "$valueKey=$single_value" : "&$valueKey=$single_value";
                 }
             } else {
-                 $stringApplet .= ($stringApplet == '') ? "$key=$values" : "&$key=$values";
+                $stringApplet .= ($stringApplet == '') ? "$key=$values" : "&$key=$values";
             }
         }
         return $stringApplet;

@@ -111,7 +111,7 @@ class Telebirr
     /**
      * Creates a new order.
      *
-     * @param array $orderData The data for the order.
+     * @param array $orderData The data for the order. This now accepts all biz_content fields.
      * @return mixed The response from the API.
      */
     public function createOrder(array $orderData)
@@ -151,24 +151,45 @@ class Telebirr
             'method' => 'payment.preorder',
             'timestamp' => $tool->createTimeStamp(),
             'version' => '1.0',
-            'biz_content' => [],
         ];
 
-        $biz = [
-            'notify_url' => $orderData['notify_url'],
+        // --- This is the updated, flexible part ---
+        // Set default values for the biz_content
+        $bizDefaults = [
             'business_type' => 'BuyGoods',
             'trade_type' => 'InApp',
+            'trans_currency' => 'ETB',
+            'timeout_express' => '120m',
+            'payee_identifier_type' => '04',
+            'payee_type' => '5000',
+            'payee_identifier' => $this->merchantCode,
+        ];
+
+        // Merge user-provided data with defaults. User data will overwrite defaults.
+        $bizContent = array_merge($bizDefaults, $orderData);
+
+        // Build the final biz_content object
+        $biz = [
             'appid' => $this->merchantAppId,
             'merch_code' => $this->merchantCode,
             'merch_order_id' => $tool->createMerchantOrderId(),
-            'title' => $orderData['title'],
-            'total_amount' => $orderData['amount'],
-            'trans_currency' => 'ETB',
-            'timeout_express' => '120m',
-            'payee_identifier' => '220311',
-            'payee_identifier_type' => '04',
-            'payee_type' => '5000',
+            'title' => $bizContent['title'],
+            'total_amount' => $bizContent['amount'],
+            'notify_url' => $bizContent['notify_url'],
+            'trade_type' => $bizContent['trade_type'],
+            'timeout_express' => $bizContent['timeout_express'],
+            'trans_currency' => $bizContent['trans_currency'],
+            'business_type' => $bizContent['business_type'],
+            'payee_identifier' => $bizContent['payee_identifier'],
+            'payee_identifier_type' => $bizContent['payee_identifier_type'],
+            'payee_type' => $bizContent['payee_type'],
         ];
+        
+        // Add optional redirect_url if the user provided it
+        if (isset($bizContent['redirect_url'])) {
+            $biz['redirect_url'] = $bizContent['redirect_url'];
+        }
+        // --- End of updated section ---
 
         $req['biz_content'] = $biz;
         $req['sign_type'] = 'SHA256WithRSA';
@@ -200,7 +221,7 @@ class Telebirr
             $rawRequest .= $map . '=' . $m . '&';
         }
         $sign = $tool->sign($maps);
-        $rawRequest .= 'sign=' . $sign;
+        $rawRequest .= 'sign=' . urlencode($sign);
 
         return $rawRequest;
     }
