@@ -2,177 +2,206 @@
 
 namespace Melaku\Telebirr;
 
+use Melaku\Telebirr\Utils\Tool;
+
+/**
+ * Main Telebirr class for handling payments.
+ */
 class Telebirr
 {
-    private $config;
+    /**
+     * The base URL for the Telebirr API.
+     *
+     * @var string
+     */
+    private $baseUrl;
 
-    public function __construct(TelebirrConfig $config)
+    /**
+     * The Fabric App ID provided by Telebirr.
+     *
+     * @var string
+     */
+    private $fabricAppId;
+
+    /**
+     * The App Secret provided by Telebirr.
+     *
+     * @var string
+     */
+    private $appSecret;
+
+    /**
+     * The Merchant App ID provided by Telebirr.
+     *
+     * @var string
+     */
+    private $merchantAppId;
+
+    /**
+     * The Merchant Code provided by Telebirr.
+     *
+     * @var string
+     */
+    private $merchantCode;
+
+    /**
+     * The public key for signing requests.
+     *
+     * @var string
+     */
+    private $publicKey;
+
+    /**
+     * The private key for signing requests.
+     *
+     * @var string
+     */
+    private $privateKey;
+
+
+    /**
+     * Telebirr constructor.
+     *
+     * @param array $config The configuration array.
+     */
+    public function __construct(array $config)
     {
-        $this->config = $config;
+        $this->baseUrl = $config['baseUrl'];
+        $this->fabricAppId = $config['fabricAppId'];
+        $this->appSecret = $config['appSecret'];
+        $this->merchantAppId = $config['merchantAppId'];
+        $this->merchantCode = $config['merchantCode'];
+        $this->publicKey = $config['publicKey'];
+        $this->privateKey = $config['privateKey'];
     }
 
-    public function getH5CheckoutUrl(string $title, float $amount, string $notifyUrl, string $returnUrl): string
+    /**
+     * Get a new instance of the Tool class.
+     *
+     * @return Tool
+     */
+    private function getTool()
     {
-        $tokenData = $this->getFabricToken();
-        $fabricToken = $tokenData['token'];
-        $prepayResponse = $this->createPrepayOrder($fabricToken, $title, $amount, $notifyUrl, $returnUrl);
-        $prepayId = $prepayResponse['biz_content']['prepay_id'];
-        return $this->buildH5RawRequestUrl($prepayId);
+        return new Tool($this->privateKey);
     }
 
-    public function getFabricToken(): array
-    {
-        $url = $this->config->getApiBaseUrl() . '/payment/v1/token';
-        $headers = ['Content-Type: application/json', 'X-APP-Key: ' . $this->config->getFabricAppId()];
-        $payload = ['appSecret' => $this->config->getAppSecret()];
-        return $this->sendRequest($url, json_encode($payload), $headers);
-    }
 
-    public function createPrepayOrder(string $fabricToken, string $title, float $amount, string $notifyUrl, string $returnUrl): array
+    /**
+     * Applies for a fabric token from the Telebirr API.
+     *
+     * @return mixed The response from the API.
+     */
+    public function applyFabricToken()
     {
-        $url = $this->config->getApiBaseUrl() . '/payment/v1/merchant/preOrder';
+        $tool = $this->getTool();
+        $url = $this->baseUrl . '/payment/v1/token';
         $headers = [
             'Content-Type: application/json',
-            'X-APP-Key: ' . $this->config->getFabricAppId(),
+            'X-APP-Key: ' . $this->fabricAppId,
+        ];
+        $payload = [
+            'appSecret' => $this->appSecret,
+        ];
+
+        $response = $tool->sendRequest($url, json_encode($payload), $headers);
+
+        return json_decode($response, true);
+    }
+
+    /**
+     * Creates a new order.
+     *
+     * @param array $orderData The data for the order.
+     * @return mixed The response from the API.
+     */
+    public function createOrder(array $orderData)
+    {
+        $tool = $this->getTool();
+        $tokenData = $this->applyFabricToken();
+        if (!isset($tokenData['token'])) {
+            return $tokenData;
+        }
+
+        $fabricToken = $tokenData['token'];
+        $url = $this->baseUrl . '/payment/v1/merchant/preOrder';
+        $headers = [
+            'Content-Type: application/json',
+            'X-APP-Key: ' . $this->fabricAppId,
             'Authorization: ' . $fabricToken,
         ];
 
-        $bizContent = [
-            'notify_url' => $notifyUrl,
+        $requestData = $this->createRequestObject($orderData, $tool);
+        $response = $tool->sendRequest($url, $requestData, $headers);
+        $prepayId = json_decode($response)->biz_content->prepay_id;
+
+        return $this->createRawRequest($prepayId, $tool);
+    }
+
+    /**
+     * Creates the request object for creating an order.
+     *
+     * @param array $orderData The data for the order.
+     * @param Tool  $tool      The Tool instance.
+     * @return string The JSON encoded request object.
+     */
+    private function createRequestObject(array $orderData, Tool $tool)
+    {
+        $req = [
+            'nonce_str' => $tool->createNonceStr(),
+            'method' => 'payment.preorder',
+            'timestamp' => $tool->createTimeStamp(),
+            'version' => '1.0',
+            'biz_content' => [],
+        ];
+
+        $biz = [
+            'notify_url' => $orderData['notify_url'],
             'business_type' => 'BuyGoods',
             'trade_type' => 'InApp',
-            'appid' => $this->config->getMerchantAppId(),
-            'merch_code' => $this->config->getShortCode(),
-            'merch_order_id' => (string)time(),
-            'title' => $title,
-            'total_amount' => number_format($amount, 2, '.', ''), // Always string
+            'appid' => $this->merchantAppId,
+            'merch_code' => $this->merchantCode,
+            'merch_order_id' => $tool->createMerchantOrderId(),
+            'title' => $orderData['title'],
+            'total_amount' => $orderData['amount'],
             'trans_currency' => 'ETB',
             'timeout_express' => '120m',
             'payee_identifier' => '220311',
             'payee_identifier_type' => '04',
             'payee_type' => '5000',
-            'redirect_url' => $returnUrl,
-            'callback_info' => 'From web',
         ];
 
-        $payload = [
-            'nonce_str' => $this->generateNonceStr(),
-            'method' => 'payment.preorder',
-            'timestamp' => (string)time(),
-            'version' => '1.0',
-            'biz_content' => $bizContent,
+        $req['biz_content'] = $biz;
+        $req['sign_type'] = 'SHA256WithRSA';
+        $req['sign'] = $tool->sign($req);
+
+        return json_encode($req);
+    }
+
+    /**
+     * Creates the raw request string for the H5 page.
+     *
+     * @param string $prepayId The prepay ID.
+     * @param Tool   $tool     The Tool instance.
+     * @return string The raw request string.
+     */
+    private function createRawRequest($prepayId, Tool $tool)
+    {
+        $maps = [
+            'appid' => $this->merchantAppId,
+            'merch_code' => $this->merchantCode,
+            'nonce_str' => $tool->createNonceStr(),
+            'prepay_id' => $prepayId,
+            'timestamp' => $tool->createTimeStamp(),
+            'sign_type' => 'SHA256WithRSA',
         ];
 
-        $payload['sign'] = $this->sign($payload);
-        $payload['sign_type'] = 'SHA256WithRSA';
-
-        echo "\n📦 Payload:\n" . json_encode($payload, JSON_PRETTY_PRINT) . "\n";
-
-        return $this->sendRequest($url, json_encode($payload), $headers);
-    }
-
-    private function buildH5RawRequestUrl(string $prepayId): string
-    {
-        $params = [
-            "appid" => $this->config->getMerchantAppId(),
-            "merch_code" => $this->config->getShortCode(),
-            "nonce_str" => $this->generateNonceStr(),
-            "prepay_id" => $prepayId,
-            "timestamp" => time(),
-        ];
-
-        $params['sign'] = $this->sign($params);
-        $params['sign_type'] = "SHA256WithRSA";
-
-        return $this->config->getH5CheckoutUrl() . '?' . http_build_query($params);
-    }
-
-    private function sign(array $request): string
-    {
-        $exclude = ['sign', 'sign_type', 'header', 'refund_info', 'openType', 'raw_request'];
-        $flat = [];
-
-        foreach ($request as $key => $value) {
-            if (in_array($key, $exclude)) continue;
-
-            if ($key === 'biz_content' && is_array($value)) {
-                foreach ($value as $k => $v) {
-                    $flat[$k] = $k === 'total_amount' ? number_format((float)$v, 2, '.', '') : (string)$v;
-                }
-            } else {
-                $flat[$key] = (string)$value;
-            }
+        $rawRequest = '';
+        foreach ($maps as $map => $m) {
+            $rawRequest .= $map . '=' . $m . '&';
         }
+        $sign = $tool->sign($maps);
+        $rawRequest .= 'sign=' . $sign;
 
-        ksort($flat);
-
-        $stringToSign = urldecode(http_build_query($flat));
-        echo "\n🔐 String to Sign:\n" . $stringToSign . "\n";
-
-        return $this->signWithRSA($stringToSign);
-    }
-
-    private function signWithRSA(string $data): string
-    {
-        $privateKey = $this->config->getPrivateKey();
-        $privateKey = $this->formatPrivateKey($privateKey);
-
-        $pkey = openssl_pkey_get_private($privateKey);
-        if (!$pkey) {
-            throw new TelebirrException("Failed to load private key.");
-        }
-
-        $signature = '';
-        $ok = openssl_sign($data, $signature, $pkey, OPENSSL_ALGO_SHA256);
-        openssl_free_key($pkey);
-
-        if (!$ok) {
-            throw new TelebirrException("Signature generation failed.");
-        }
-
-        return base64_encode($signature);
-    }
-
-    private function formatPrivateKey(string $key): string
-    {
-        $key = str_replace(["\r", "\n", " "], '', $key);
-        return "-----BEGIN PRIVATE KEY-----\n" . chunk_split($key, 64, "\n") . "-----END PRIVATE KEY-----";
-    }
-
-    private function sendRequest(string $url, string $payload, array $headers): array
-    {
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, $url);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-        curl_setopt($ch, CURLOPT_POST, 1);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
-
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-
-        echo "\n🧪 Raw Response:\n$response\n";
-
-        if (curl_errno($ch)) throw new TelebirrException('cURL Error: ' . curl_error($ch));
-        curl_close($ch);
-
-        $decoded = json_decode($response, true);
-
-        if ($decoded === null && !empty($response)) {
-            throw new TelebirrException('Invalid JSON response: ' . $response, $httpCode);
-        }
-
-        if ($httpCode >= 400 || (isset($decoded['code']) && !in_array($decoded['code'], ['0', '200']))) {
-            throw new TelebirrException('Telebirr API Error: ' . ($decoded['msg'] ?? 'Unknown error'), $httpCode);
-        }
-
-        return $decoded;
-    }
-
-    private function generateNonceStr(): string
-    {
-        return bin2hex(random_bytes(16));
+        return $rawRequest;
     }
 }

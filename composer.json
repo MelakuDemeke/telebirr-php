@@ -18,6 +18,7 @@
         "php": ">=7.4.0",
         "ext-curl": "*",
         "ext-json": "*",
-        "ext-openssl": "*"
+        "ext-openssl": "*",
+        "phpseclib/phpseclib": "^3.0"
     }
 }
