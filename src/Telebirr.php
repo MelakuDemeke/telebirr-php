@@ -3,24 +3,49 @@
 namespace Melaku\Telebirr;
 
 use Melaku\Telebirr\Utils\Tool;
+use InvalidArgumentException;
 
-
+/**
+ * Main class for interacting with the Telebirr API.
+ *
+ * This class provides methods to handle Telebirr payment gateway integration,
+ * including creating orders and applying for fabric tokens.
+ */
 class Telebirr
 {
+    /** @var string The base URL for the Telebirr API. */
     private $baseUrl;
+
+    /** @var string The Fabric App ID provided by Telebirr. */
     private $fabricAppId;
+
+    /** @var string The App Secret provided by Telebirr. */
     private $appSecret;
+
+    /** @var string The Merchant App ID provided by Telebirr. */
     private $merchantAppId;
+
+    /** @var string The merchant's short code. */
     private $merchantCode;
+
+    /** @var string The merchant's private key for signing requests. */
     private $privateKey;
 
     /**
      * Telebirr constructor.
      *
      * @param array $config The configuration array.
+     * @throws InvalidArgumentException If a required configuration key is missing.
      */
     public function __construct(array $config)
     {
+        $requiredKeys = ['baseUrl', 'fabricAppId', 'appSecret', 'merchantAppId', 'merchantCode', 'privateKey'];
+        foreach ($requiredKeys as $key) {
+            if (!isset($config[$key]) || empty($config[$key])) {
+                throw new InvalidArgumentException("Configuration key '{$key}' is required.");
+            }
+        }
+
         $this->baseUrl = $config['baseUrl'];
         $this->fabricAppId = $config['fabricAppId'];
         $this->appSecret = $config['appSecret'];
@@ -68,7 +93,7 @@ class Telebirr
     /**
      * Applies for a fabric token from the Telebirr API.
      *
-     * @return mixed The response from the API.
+     * @return array The response from the API, decoded as an associative array.
      */
     public function applyFabricToken()
     {
@@ -83,21 +108,26 @@ class Telebirr
         ];
 
         $response = $tool->sendRequest($url, json_encode($payload), $headers);
+        $decodedResponse = json_decode($response, true);
 
-        return json_decode($response, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            return ['error' => 'Invalid JSON response from token API', 'raw_response' => $response];
+        }
+
+        return $decodedResponse;
     }
 
     /**
      * Creates a new order.
      *
      * @param array $orderData The data for the order. This now accepts all biz_content fields.
-     * @return mixed The response from the API.
+     * @return string|array The raw request string for redirection on success, or an error array on failure.
      */
     public function createOrder(array $orderData)
     {
         $tool = $this->getTool();
         $tokenData = $this->applyFabricToken();
-        if (!isset($tokenData['token'])) {
+        if (!isset($tokenData['token']) || empty($tokenData['token'])) {
             return $tokenData;
         }
 
@@ -111,7 +141,13 @@ class Telebirr
 
         $requestData = $this->createRequestObject($orderData, $tool);
         $response = $tool->sendRequest($url, $requestData, $headers);
-        $prepayId = json_decode($response)->biz_content->prepay_id;
+        $decodedResponse = json_decode($response);
+
+        if (json_last_error() !== JSON_ERROR_NONE || !isset($decodedResponse->biz_content->prepay_id)) {
+            return ['error' => 'Failed to get prepay_id from preOrder response.', 'raw_response' => $response];
+        }
+
+        $prepayId = $decodedResponse->biz_content->prepay_id;
 
         return $this->createRawRequest($prepayId, $tool);
     }
@@ -180,7 +216,7 @@ class Telebirr
      */
     private function createRawRequest($prepayId, Tool $tool)
     {
-        $maps = [
+        $params = [
             'appid' => $this->merchantAppId,
             'merch_code' => $this->merchantCode,
             'nonce_str' => $tool->createNonceStr(),
@@ -189,12 +225,9 @@ class Telebirr
             'sign_type' => 'SHA256WithRSA',
         ];
 
-        $rawRequest = '';
-        foreach ($maps as $map => $m) {
-            $rawRequest .= $map . '=' . $m . '&';
-        }
-        $sign = $tool->sign($maps);
-        $rawRequest .= 'sign=' . urlencode($sign);
+        $queryString = http_build_query($params);
+        $sign = $tool->sign($params);
+        $rawRequest = $queryString . '&sign=' . urlencode($sign);
 
         return $rawRequest;
     }
