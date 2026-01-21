@@ -60,9 +60,15 @@ $config = new Config([
     'merchantAppId' => getenv('TELEBIRR_MERCHANT_APP_ID'),
     'merchantCode'  => getenv('TELEBIRR_MERCHANT_CODE'),
     'privateKey'    => getenv('TELEBIRR_PRIVATE_KEY_PEM'),
-    'notifyUrl'     => 'https://your-domain.com/telebirr/notify', // optional
+    'notifyUrl'     => 'https://your-domain.com/telebirr/notify', // Required: server-to-server callback URL
 ]);
 ```
+
+**Important:** `notifyUrl` is **required**. This is where Telebirr will send payment status updates (success/failure) via POST requests. This endpoint should:
+- Be accessible from the internet (HTTPS recommended)
+- Handle server-to-server notifications (not user-facing)
+- Update your database and mark orders as paid/failed
+- Return appropriate JSON responses
 
 ## Basic usage (recommended)
 

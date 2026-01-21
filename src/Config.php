@@ -22,6 +22,10 @@ class Config
         $this->merchantAppId = $options['merchantAppId'];
         $this->merchantCode  = $options['merchantCode'];
         $this->privateKey    = $options['privateKey'];
-        $this->notifyUrl     = $options['notifyUrl'] ?? 'https://www.google.com';
+        
+        if (empty($options['notifyUrl'])) {
+            throw new \InvalidArgumentException('notifyUrl is required. This is where Telebirr will send payment status updates.');
+        }
+        $this->notifyUrl = $options['notifyUrl'];
     }
 }
