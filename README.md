@@ -3,7 +3,7 @@
 </a>
 
 
-# Telebirr Php library v 0.1
+# Telebirr PHP Library (Web Checkout)
 ![](img/telebanner.png)
 
 ![GitHub branch checks state](https://img.shields.io/github/checks-status/MelakuDemeke/telebirr-php/main)
@@ -17,134 +17,167 @@
 ![GitHub commit activity](https://img.shields.io/github/commit-activity/m/MelakuDemeke/telebirr-php?logo=github)
 ![GitHub last commit](https://img.shields.io/github/last-commit/MelakuDemeke/telebirr-php)
 
-Telebirr-Php is a php library for [telebirr](https://www.ethiotelecom.et/telebirr/).  
+Telebirr-Php is a PHP library for [telebirr](https://www.ethiotelecom.et/telebirr/).  
 Telebirr is a mobile money service developed by Huawei that is owned and was launched by Ethio telecom.  
-This library will help you by providing an easy integration method so you can focus on your main task
+This library focuses on the **Web Checkout (C2B)** flow and provides a modern, easy-to-use API, mirroring the official demo implementation.
 
 ## Table of content
 
-- [Telebirr Php library v 0.1](#telebirr-php-library-v-01)
+- [Telebirr PHP Library (Web Checkout)](#telebirr-php-library-web-checkout)
   - [Table of content](#table-of-content)
   - [Installation](#installation)
     - [Composer](#composer)
-  - [Usage](#usage)
-    - [Required information's](#required-informations)
-    - [General setup](#general-setup)
-    - [To initialize payment](#to-initialize-payment)
-    - [Decrypt payment data](#decrypt-payment-data)
+  - [Configuration](#configuration)
+  - [Basic usage (recommended)](#basic-usage-recommended)
+  - [Advanced usage (manual steps)](#advanced-usage-manual-steps)
+  - [Webhook / Notification handling](#webhook--notification-handling)
+  - [Security & Requirements](#security--requirements)
+
 ## Installation
 ### Composer
-``` 
-composer require melaku/telebirr 
+```bash
+composer require melaku/telebirr
 ```
 
-## Usage
+## Configuration
 
-### Required information's
-you will receive the required information from Tele with information which looks like theis :arrow_down:
+You will receive the required information from Telebirr similar to:
 
-| merchant name   | short code   |  APP ID | APP KEY  |  Public ID | H5  | InApp Payment   |
-|---|---|---|---|---|---|---|
-| owner name  | 6-digit code  | 32-character Id  | 32-character key  | 392-character public key  | web payment url  | mobile payment url  |
+| merchant name | short code | APP ID | APP KEY | Private key | Web base URL | API base URL |
+| ------------- | ---------- | ------ | ------- | ----------- | ------------ | ------------ |
+| owner name    | 6-digit    | UUID   | secret  | RSA key     | web payment  | gateway API  |
 
-you should store those information in your development environment like `.env` file
+Store these in environment variables or a config file, then create a `Melaku\Telebirr\Config`:
 
-### General setup
-you should always require the composer autoload
-```PHP
+```php
+use Melaku\Telebirr\Config;
+
+$config = new Config([
+    'baseUrl'       => 'https://developerportal.ethiotelebirr.et:38443/apiaccess/payment/gateway',
+    'webBaseUrl'    => 'https://developerportal.ethiotelebirr.et:38443/payment/web/paygate?',
+    'fabricAppId'   => getenv('TELEBIRR_FABRIC_APP_ID'),
+    'appSecret'     => getenv('TELEBIRR_APP_SECRET'),
+    'merchantAppId' => getenv('TELEBIRR_MERCHANT_APP_ID'),
+    'merchantCode'  => getenv('TELEBIRR_MERCHANT_CODE'),
+    'privateKey'    => getenv('TELEBIRR_PRIVATE_KEY_PEM'),
+    'notifyUrl'     => 'https://your-domain.com/telebirr/notify', // optional
+]);
+```
+
+## Basic usage (recommended)
+
+```php
 require 'vendor/autoload.php';
+
+use Melaku\Telebirr\Config;
+use Melaku\Telebirr\Telebirr;
+
+$config = new Config([
+    'baseUrl'       => 'https://developerportal.ethiotelebirr.et:38443/apiaccess/payment/gateway',
+    'webBaseUrl'    => 'https://developerportal.ethiotelebirr.et:38443/payment/web/paygate?',
+    'fabricAppId'   => 'YOUR_FABRIC_APP_ID',
+    'appSecret'     => 'YOUR_APP_SECRET',
+    'merchantAppId' => 'YOUR_MERCHANT_APP_ID',
+    'merchantCode'  => 'YOUR_MERCHANT_CODE',
+    'privateKey'    => \"-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\",
+    'notifyUrl'     => 'https://your-domain.com/telebirr/notify',
+]);
+
+$client = new Telebirr($config);
+
+// Title and amount come from your application / cart
+$title  = 'My Order #123';
+$amount = '100.00';
+
+// High-level helper: does token + preOrder + checkout URL
+$checkoutUrl = $client->createCheckoutUrl($title, $amount);
+
+// Redirect customer to Telebirr checkout
+header('Location: ' . $checkoutUrl);
+exit;
 ```
 
-### To initialize payment
+## Advanced usage (manual steps)
 
-- step 1 Initialize the information from Telebirr in variable
-  - ```PHP
-      $PUBLICKEY = "YOUR PUBLIC KEY";
-      $APPKEY = "YOUR APP KEY";
-      $APPID = "YOUR APP ID";
-      $SHORTCODE = "YOUR SHORT CODE";
-      $API = "YOUR WEBPAY URL";
-    ```
-- step 2 Initialize information from your side in a variable
-  - ```PHP
-      $NOTIFYURL = "http://YOUR/NOTIFY/URL";
-      $RETURNURL = "http://YOUR/RERURN/URL";
-      $TIMEOUT = '30';
-      $RECIVER = "COMPANY NAME";
-      $totalAmount = 3;
-      $subject = "REASON FOR PAYMENT";
-    ```
-  - explanation
-    - `NOTIFYURL` - is the URL that will receive the payment status from telebirr and is responsible for updating your Database
-    - `RETURNURL` - the URL that will be returned after payment usually it is the checkout screen
-    - `TIMEOUT` - payment timeout, it is set 30 seconds by default
-    - `RECIVER` - the company that will receive the payment
-    - `totalAmount` - is the amount that should be paid, this information usually comes from POST so assign the value accordingly
-    - `subject` - it is the reason for payment, eg. book purchase
-  
-- step 3  Create a new object of Telebirr class with all informations
-  - ```PHP
-      $pay1 = new Melaku\Telebirr\Telebirr(
-        $PUBLICKEY,
-        $APPKEY,
-        $APPID,
-        $API,
-        $SHORTCODE,
-        $NOTIFYURL, 
-        $RETURNURL,
-        $TIMEOUT,
-        $RECIVER,
-        $totalAmount,
-        $subject,
-      );
-    ```
-- step 4 get the payment url
+```php
+require 'vendor/autoload.php';
 
-  - ```PHP
-      var_dump($pay1->getPyamentUrl());
-    ```
-  - this will return payment url like `http://196.188.120.3:11443/ammwebpay/#/?transactionNo=123456789` the transaction number `123456789` is used for example yours will be different
-  - after this you are required to redirect your header to the payurl
+use Melaku\Telebirr\Config;
+use Melaku\Telebirr\Telebirr;
 
-    - ```PHP
-        header("Location:" . $pay1->getPyamentUrl());
-      ```
-    - this will forward you to the payment screen
-  
-### Decrypt payment data 
-- step 1 define public key and data received form telebirr
+$config = new Config([/* ... see above ... */]);
+$client = new Telebirr($config);
 
-  - ```PHP
-      $PUBLICKEY = "YOUR PUBLIC KEY";
-      $data = "DATA RECIVED FROM TEELEBIRR VIA NOTIFY URL";
-    ```
-    - explanation
-      - `PUBLICKEY` - is the same as the public key defined during payment initialization
-      - `data` -  is the data received from telebirr from the notify URL, your notify URL should accept plain text not JSON, you can get incoming data by using ⬇️
+// 1) Apply fabric token
+$tokenInfo   = $client->applyFabricToken();
+$fabricToken = $tokenInfo['token']; // "Bearer xxx"
 
-        - ```PHP
-            $data = file_get_contents('php://input');
-          ```
-- step 2  Create a new object of Notify class with `$PUBLICKEY` and `$data`
+// 2) Create order
+$order = $client->createOrder($fabricToken, $title, $amount);
 
-  - ```PHP
-    $result = new \Melaku\Telebirr\Notify($PUBLICKEY,$data);
-    ```
-  - to get the payment result call `getPaymentInfo()`
+// 3) Build checkout URL
+if (!isset($order['biz_content']['prepay_id'])) {
+    throw new \RuntimeException('prepay_id missing: ' . json_encode($order));
+}
 
-    - ```PHP
-      var_dump($result->getPaymentInfo());
-      ```
-  - The `getPaymentInfo()` will return a json data like ⬇️
+$checkoutUrl = $client->buildCheckoutUrl($order['biz_content']['prepay_id']);
+header('Location: ' . $checkoutUrl);
+exit;
+```
 
-    - ```JSON
-      {
-        "msisdn":"251900000032",
-        "outTradeNo":"15380eaea1405302ee0821b62546682c",
-        "totalAmount":"10",
-        "tradeDate":1670051315108,
-        "tradeNo":"202212031008041598937091913756674",
-        "tradeStatus":2,
-        "transactionNo":"9L360NSV4U"
-      }
-      ```
+## Webhook / Notification handling
+
+For server-to-server notifications (Telebirr calls your server), use a separate endpoint (e.g. `/telebirr/notify`):
+
+```php
+// notify.php
+require 'vendor/autoload.php';
+
+use Melaku\Telebirr\Config;
+
+$config = new Config([/* same as before */]);
+
+header('Content-Type: application/json');
+
+$rawData = file_get_contents('php://input');
+$notification = json_decode($rawData, true);
+
+// TODO: verify signature if Telebirr provides it
+// TODO: implement idempotency (do not process same payment twice)
+
+// Example fields (check Telebirr docs):
+// $prepayId      = $notification['prepay_id'] ?? null;
+// $status        = $notification['status'] ?? null;
+// $merchOrderId  = $notification['merch_order_id'] ?? null;
+
+// Update your DB, mark order paid/failed, etc.
+
+echo json_encode(['success' => true, 'message' => 'Notification processed']);
+```
+
+If you need to **decrypt legacy payments** from the older API using RSA public key, you can still use the existing `Melaku\Telebirr\Notify` class as before:
+
+```php
+use Melaku\Telebirr\Notify;
+
+$publicKey = 'YOUR PUBLIC KEY (base64, without PEM headers)';
+$data      = file_get_contents('php://input'); // raw encrypted data from Telebirr
+
+$notify = new Notify($publicKey, $data);
+$json   = $notify->getPaymentInfo(); // decrypted JSON string
+```
+
+## Security & Requirements
+
+- **Requirements**
+  - PHP >= 7.4
+  - `ext-curl`
+  - `ext-openssl`
+  - `openssl` CLI available in `PATH` (used for RSA-PSS signing)
+
+- **Best practices**
+  - Never commit secrets (keys, app IDs) to version control.
+  - Keep all payment endpoints (`notify`, `return`) on HTTPS.
+  - Log all payment-related operations for audit and debugging.
+  - Implement idempotency in your notify handler (process each transaction once).
+  - Validate and sanitize all external input before using it.

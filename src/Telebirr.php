@@ -3,166 +3,214 @@
 namespace Melaku\Telebirr;
 
 /**
- * Telebirr payment helper
- * 
- * @publicKey		public key provided form tele
- * @appKey			app key provided form tele
- * @appId			app id provided form tele
- * @api				payment getway provided form tele
- * @notifyUrl		your notify url which will get the after payment data
- * @returnUrl		your sucess page
- * @shortCode		short code form tele
- * @timeoutExpress  pyament timeout usually it is 30s 
- * @receiveName		the company name whos goingto recive the payment 
- * @totalAmount		the amount shuld be paid
- * @subject			payment subject
- * 	
+ * Telebirr Web Checkout client (modern API).
+ *
+ * This class mirrors the new `php-lib` TelebirrClient but keeps the original
+ * package namespace and name (`melaku/telebirr`).
  */
-
 class Telebirr
 {
-	private $publicKey;
-	private $appKey;
-	private $appId;
-	private $api;
-	private $shortCode;
-	private $notifyUrl;
-	private $returnUrl;
-	private $timeoutExpress;
-	private $receiveName;
-	private $totalAmount;
-	private $subject;
+	private Config $config;
+	private Signer $signer;
 
-
-	function __construct(
-		$publicKey,
-		$appKey,
-		$appId,
-		$api,
-		$shortCode,
-		$notifyUrl,
-		$returnUrl,
-		$timeoutExpress,
-		$receiveName,
-		$totalAmount,
-		$subject
-	)
+	public function __construct(Config $config)
 	{
-		$this->publicKey = $publicKey;
-		$this->appKey = $appKey;
-		$this->appId = $appId;
-		$this->api = $api;
-		$this->shortCode = $shortCode;
-		$this->notifyUrl = $notifyUrl;
-		$this->returnUrl = $returnUrl;
-		$this->timeoutExpress = $timeoutExpress;
-		$this->receiveName = $receiveName;
-		$this->totalAmount = $totalAmount;
-		$this->subject = $subject;
+		$this->config = $config;
+		$this->signer = new Signer($config);
 	}
 
 	/**
-	 * getPaymentUrl returns the to pay url
+	 * Step 1: Apply fabric token.
+	 *
+	 * @return array { token, effectiveDate, expirationDate, ... }
 	 */
-
-	public function getPyamentUrl()
+	public function applyFabricToken(): array
 	{
-		$nonce = time();
-		$str = rand();
-		$result = md5($str);
+		$url = $this->config->baseUrl . '/payment/v1/token';
 
-		$data = [
-			'outTradeNo' => $result,
-			'subject' => $this->subject,
-			'totalAmount' => $this->totalAmount,
-			'shortCode' => $this->shortCode,
-			'notifyUrl' => $this->notifyUrl,
-			'returnUrl' => $this->returnUrl,
-			'receiveName' => $this->receiveName,
-			'appId' => $this->appId,
-			'timeoutExpress' => $this->timeoutExpress,
-			'nonce' => $result,
-			'timestamp' => $nonce,
-			'appKey' => $this->appKey
-		];
+		$payload = json_encode([
+			'appSecret' => $this->config->appSecret,
+		]);
 
-		ksort($data);
-		$StringA = '';
-		foreach ($data as $k => $v) {
-			if ($StringA == '') {
-				$StringA = $k . '=' . $v;
-			} else {
-				$StringA = $StringA . '&' . $k . '=' . $v;
-			}
+		$ch = curl_init($url);
+		curl_setopt_array($ch, [
+			CURLOPT_CUSTOMREQUEST  => 'POST',
+			CURLOPT_RETURNTRANSFER => true,
+			CURLOPT_HTTPHEADER     => [
+				'Content-Type: application/json',
+				'X-APP-Key: ' . $this->config->fabricAppId,
+			],
+			CURLOPT_POSTFIELDS     => $payload,
+			CURLOPT_SSL_VERIFYPEER => false,
+			CURLOPT_SSL_VERIFYHOST => false,
+		]);
+
+		$responseBody = curl_exec($ch);
+		$error        = curl_error($ch);
+		curl_close($ch);
+
+		if ($responseBody === false) {
+			throw new \RuntimeException('Failed to call token API: ' . $error);
 		}
-		$StringB = hash("sha256", $StringA);
 
-		$sign = strtoupper($StringB);
+		$result = json_decode($responseBody, true);
+		if (!is_array($result)) {
+			throw new \RuntimeException('Invalid token API response: ' . $responseBody);
+		}
 
-		$ussdjson = json_encode($data);
-		$ussd = $this->encryptRSA($ussdjson, $this->publicKey);
-		$requestMessage = [
-			'appid' => $this->appId,
-			'sign' => $sign,
-			'ussd' => $ussd
-		];
-
-		$curl = curl_init($this->api);
-		curl_setopt($curl, CURLOPT_URL, $this->api);
-		curl_setopt($curl, CURLOPT_POST, true);
-		curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
-		
-		$headers = array(
-			"Accept: application/json",
-			"Content-Type: application/json",
-		);
-		curl_setopt($curl, CURLOPT_HTTPHEADER, $headers);
-		
-		$data = json_encode($requestMessage);
-		curl_setopt($curl, CURLOPT_POSTFIELDS, $data);
-		
-		//for debug only!
-		curl_setopt($curl, CURLOPT_SSL_VERIFYHOST, false);
-		curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, false);
-		
-		$resp = curl_exec($curl);
-		curl_close($curl);
-		// var_dump($resp);
-		
-		
-		$decode = json_decode($resp, true);
-		$topayUrl = $decode['data']['toPayUrl'];
-		
-		return $topayUrl;
+		return $result;
 	}
 
 	/**
-	 * encryptRSA encrypt the data using the public key
-	 * 
-	 * @data	the data tobe encrypted
-	 * @public	public key from telebirr
+	 * Step 2: Create order and return full Telebirr response.
+	 *
+	 * @param string $fabricToken "Bearer xxx"
+	 * @param string $title       Order title
+	 * @param string|int|float $amount  Total amount
+	 *
+	 * @return array Full API response (should contain biz_content.prepay_id on success)
 	 */
-
-	private function encryptRSA($data, $public)
+	public function createOrder(string $fabricToken, string $title, $amount): array
 	{
-		$pubPem = chunk_split($public, 64, "\n");
-		$pubPem = "-----BEGIN PUBLIC KEY-----\n" . $pubPem . "-----END PUBLIC KEY-----\n";
-		$public_key = openssl_pkey_get_public($pubPem);
-	
-		if (!$public_key) {
-			die('invalid public key');
+		$reqObject = $this->buildPreOrderRequest($title, $amount);
+
+		$url = $this->config->baseUrl . '/payment/v1/merchant/preOrder';
+
+		$payload = json_encode($reqObject);
+
+		$ch = curl_init($url);
+		curl_setopt_array($ch, [
+			CURLOPT_CUSTOMREQUEST  => 'POST',
+			CURLOPT_RETURNTRANSFER => true,
+			CURLOPT_HTTPHEADER     => [
+				'Content-Type: application/json',
+				'X-APP-Key: ' . $this->config->fabricAppId,
+				'Authorization: ' . $fabricToken,
+			],
+			CURLOPT_POSTFIELDS     => $payload,
+			CURLOPT_SSL_VERIFYPEER => false,
+			CURLOPT_SSL_VERIFYHOST => false,
+		]);
+
+		$responseBody = curl_exec($ch);
+		$error        = curl_error($ch);
+		curl_close($ch);
+
+		if ($responseBody === false) {
+			throw new \RuntimeException('Failed to call create order API: ' . $error);
 		}
-		$crypto = '';
-		foreach (str_split($data, 117) as $chunk) {
-			$return = openssl_public_encrypt($chunk, $cryptoItem, $public_key);
-			if (!$return) {
-				return ('fail');
-			}
-			$crypto .= $cryptoItem;
+
+		$result = json_decode($responseBody, true);
+		if (!is_array($result)) {
+			throw new \RuntimeException('Invalid create order API response: ' . $responseBody);
 		}
-		$ussd = base64_encode($crypto);
-		return $ussd;
+
+		return $result;
+	}
+
+	/**
+	 * Step 3: Build checkout URL from prepay_id.
+	 */
+	public function buildCheckoutUrl(string $prepayId): string
+	{
+		$rawRequest = $this->buildRawCheckoutRequest($prepayId);
+
+		return $this->config->webBaseUrl . $rawRequest . '&version=1.0&trade_type=Checkout';
+	}
+
+	/**
+	 * High-level helper: do all steps and return final checkout URL.
+	 */
+	public function createCheckoutUrl(string $title, $amount): string
+	{
+		$tokenInfo   = $this->applyFabricToken();
+		$fabricToken = $tokenInfo['token'] ?? null;
+		if (!$fabricToken) {
+			throw new \RuntimeException('Fabric token missing in token response: ' . json_encode($tokenInfo));
+		}
+
+		$order = $this->createOrder($fabricToken, $title, $amount);
+
+		if (
+			!isset($order['biz_content']) ||
+			!is_array($order['biz_content']) ||
+			!isset($order['biz_content']['prepay_id'])
+		) {
+			throw new \RuntimeException(
+				'prepay_id missing in create order response: ' . json_encode($order)
+			);
+		}
+
+		return $this->buildCheckoutUrl($order['biz_content']['prepay_id']);
+	}
+
+	/**
+	 * Internal: build preOrder request body exactly as Telebirr expects.
+	 */
+	private function buildPreOrderRequest(string $title, $amount): array
+	{
+		// API expects total_amount as string
+		$amountStr = is_numeric($amount)
+			? number_format((float) $amount, 2, '.', '')
+			: (string) $amount;
+
+		$req = [
+			'timestamp' => Signer::createTimeStamp(),
+			'nonce_str' => Signer::createNonceStr(),
+			'method'    => 'payment.preorder',
+			'version'   => '1.0',
+		];
+
+		$biz = [
+			'notify_url'     => $this->config->notifyUrl,
+			'appid'          => $this->config->merchantAppId,
+			'merch_code'     => $this->config->merchantCode,
+			'merch_order_id' => $this->createMerchantOrderId(),
+			'trade_type'     => 'Checkout',
+			'title'          => $title,
+			'total_amount'   => $amountStr,
+			'trans_currency' => 'ETB',
+			'timeout_express' => '120m',
+		];
+
+		$req['biz_content'] = $biz;
+
+		$req['sign']      = $this->signer->signRequestObject($req);
+		$req['sign_type'] = 'SHA256WithRSA';
+
+		return $req;
+	}
+
+	/**
+	 * Internal: build raw request string for the web checkout URL.
+	 */
+	private function buildRawCheckoutRequest(string $prepayId): string
+	{
+		$map = [
+			'appid'     => $this->config->merchantAppId,
+			'merch_code' => $this->config->merchantCode,
+			'nonce_str' => Signer::createNonceStr(),
+			'prepay_id' => $prepayId,
+			'timestamp' => Signer::createTimeStamp(),
+		];
+
+		$sign = $this->signer->signRequestObject($map);
+
+		$parts = [
+			'appid=' . $map['appid'],
+			'merch_code=' . $map['merch_code'],
+			'nonce_str=' . $map['nonce_str'],
+			'prepay_id=' . $map['prepay_id'],
+			'timestamp=' . $map['timestamp'],
+			'sign=' . $sign,
+			'sign_type=SHA256WithRSA',
+		];
+
+		return implode('&', $parts);
+	}
+
+	private function createMerchantOrderId(): string
+	{
+		return (string) (int) (microtime(true) * 1000);
 	}
 }
-
-?>
