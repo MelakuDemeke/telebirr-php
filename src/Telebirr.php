@@ -228,11 +228,24 @@ class Telebirr
 	/**
 	 * High-level helper: applyFabricToken + createOrder + buildCheckoutUrl.
 	 *
+	 * This method performs all three steps of the Telebirr H5 C2B Web Payment Integration:
+	 * 1. Apply fabric token (authentication)
+	 * 2. Create order (requestCreateOrder) - gets prepay_id
+	 * 3. Generate checkout URL (Generate_Check_Url)
+	 *
+	 * After calling this method, redirect the user to the returned URL. The user will:
+	 * - See the Telebirr payment page (CheckOut step)
+	 * - Complete or cancel the payment
+	 * - Be redirected back to your redirectUrl (if configured) with payment status
+	 * - Trigger a server-to-server notification to your notifyUrl
+	 *
+	 * @see https://developer.ethiotelecom.et/docs/H5%20C2B%20Web%20Payment%20Integration%20Quick%20Guide/%20CheckOut
+	 *
 	 * @param string      $title        Order title
 	 * @param string|int|float $amount  Total amount (ETB)
 	 * @param string|null $merchOrderId Optional merchant order ID; if null, one is generated
 	 *
-	 * @return string Checkout URL to redirect the user to
+	 * @return string Checkout URL to redirect the user to (user will complete payment on Telebirr page)
 	 */
 	public function createCheckoutUrl(string $title, $amount, ?string $merchOrderId = null): string
 	{

@@ -19,7 +19,7 @@
 
 Telebirr-Php is a PHP library for [telebirr](https://www.ethiotelecom.et/telebirr/).  
 Telebirr is a mobile money service developed by Huawei that is owned and was launched by Ethio telecom.  
-This library focuses on the **Web Checkout (C2B)** flow and provides a modern, easy-to-use API, fully compliant with the [Telebirr H5 C2B Web Payment Integration Quick Guide](https://developer.ethiotelecom.et/docs/H5%20C2B%20Web%20Payment%20Integration%20Quick%20Guide/requestCreateOrder).
+This library focuses on the **Web Checkout (C2B)** flow and provides a modern, easy-to-use API, fully compliant with the [Telebirr H5 C2B Web Payment Integration Quick Guide](https://developer.ethiotelecom.et/docs/H5%20C2B%20Web%20Payment%20Integration%20Quick%20Guide/requestCreateOrder), covering all steps from order creation to payment completion.
 
 ## Table of content
 
@@ -168,6 +168,60 @@ The `buildCheckoutUrl()` method implements the **Generate_Check_Url** step from 
   5. Combines with `webBaseUrl` to form the complete payment gateway URL
 - **URL Format**: `{webBaseUrl}?appid={appid}&merch_code={merch_code}&nonce_str={nonce_str}&prepay_id={prepay_id}&timestamp={timestamp}&sign={sign}&sign_type=SHA256WithRSA&version=1.0&trade_type=Checkout`
 - **Documentation**: See [Generate_Check_Url Guide](https://developer.ethiotelecom.et/docs/H5%20C2B%20Web%20Payment%20Integration%20Quick%20Guide/Generate_Check_Url)
+
+### CheckOut Process Details
+
+The **CheckOut** step is where users complete their payment on the Telebirr payment page. This process is documented in the Telebirr H5 C2B Web Payment Integration Quick Guide:
+
+**CheckOut Flow:**
+1. **User Redirect**: After calling `buildCheckoutUrl()` or `createCheckoutUrl()`, redirect the user to the returned URL
+2. **Payment Page**: User sees the Telebirr payment page with order details
+3. **Payment Completion**: User completes payment (or cancels) on Telebirr
+4. **Return Redirect**: Telebirr redirects user back to your `redirectUrl` (if configured) with payment status parameters
+5. **Server Notification**: Telebirr also sends a server-to-server notification to your `notifyUrl`
+
+**Return URL Parameters** (when user is redirected back):
+- `trade_status`: Payment status (e.g., `PAY_SUCCESS`, `PAY_FAILED`, `PAY_CANCEL`)
+- `payment_order_id`: Telebirr's payment order ID
+- `merch_order_id`: Your merchant order ID (from `createOrder`)
+- `total_amount`: Payment amount
+- `trans_currency`: Currency (typically `ETB`)
+- `trans_end_time`: Transaction completion timestamp
+- `notify_time`: Notification timestamp
+- `appid`: Merchant application ID
+- `merch_code`: Merchant code
+- `sign`: Signature for verification
+- `sign_type`: Signature type (typically `SHA256WithRSA`)
+
+**Important Notes:**
+- The return URL (`redirectUrl`) is **user-facing** - display payment results to the user
+- The notification URL (`notifyUrl`) is **server-to-server** - update your database and process business logic
+- Always verify payment status on your server using the `notifyUrl` endpoint, not just the return URL
+- The return URL may be accessed multiple times or by users who didn't complete payment
+- Implement idempotency checks to avoid processing the same payment twice
+
+**Example Return URL Handler:**
+```php
+// return.php - User-facing return page
+$tradeStatus = $_GET['trade_status'] ?? '';
+$paymentOrderId = $_GET['payment_order_id'] ?? '';
+$merchOrderId = $_GET['merch_order_id'] ?? '';
+$totalAmount = $_GET['total_amount'] ?? '';
+
+// Check if payment was successful
+$isSuccess = strtoupper($tradeStatus) === 'PAY_SUCCESS';
+
+// Display result to user
+if ($isSuccess) {
+    echo "Payment successful! Order ID: {$merchOrderId}";
+} else {
+    echo "Payment failed or cancelled. Status: {$tradeStatus}";
+}
+
+// Note: Don't update database here - use notifyUrl for that
+```
+
+**Documentation**: See [CheckOut Guide](https://developer.ethiotelecom.et/docs/H5%20C2B%20Web%20Payment%20Integration%20Quick%20Guide/%20CheckOut)
 
 ## Webhook / Notification handling
 
