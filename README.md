@@ -176,6 +176,20 @@ $notify = new Notify($publicKey, $data);
 $json   = $notify->getPaymentInfo(); // decrypted JSON string
 ```
 
+## Complete Usage Guide
+
+For detailed integration instructions, examples, and best practices, see **[USAGE_GUIDE.md](USAGE_GUIDE.md)**.
+
+The guide includes:
+- Step-by-step installation and configuration
+- Complete payment flow examples
+- Shopping cart integration
+- Database integration patterns
+- Webhook handling with idempotency
+- Error handling strategies
+- Security best practices
+- Troubleshooting guide
+
 ## Security & Requirements
 
 - **Requirements**
@@ -185,8 +199,9 @@ $json   = $notify->getPaymentInfo(); // decrypted JSON string
   - `openssl` CLI available in `PATH` (used for RSA-PSS signing)
 
 - **Best practices**
-  - Never commit secrets (keys, app IDs) to version control.
-  - Keep all payment endpoints (`notify`, `return`) on HTTPS.
-  - Log all payment-related operations for audit and debugging.
-  - Implement idempotency in your notify handler (process each transaction once).
-  - Validate and sanitize all external input before using it.
+  - Never commit secrets (keys, app IDs) to version control
+  - Keep all payment endpoints (`notify`, `return`) on HTTPS
+  - Log all payment-related operations for audit and debugging
+  - Implement idempotency in your notify handler (process each transaction once)
+  - Validate and sanitize all external input before using it
+  - Store credentials in environment variables, not in code

@@ -162,19 +162,19 @@ class Telebirr
 		];
 
 		$biz = [
-			'notify_url'     => $this->config->notifyUrl,
-			'appid'          => $this->config->merchantAppId,
-			'merch_code'     => $this->config->merchantCode,
-			'merch_order_id' => $this->createMerchantOrderId(),
-			'trade_type'     => 'Checkout',
-			'title'          => $title,
-			'total_amount'   => $amountStr,
-			'trans_currency' => 'ETB',
+			'notify_url'      => $this->config->notifyUrl,
+			'appid'           => $this->config->merchantAppId,
+			'merch_code'      => $this->config->merchantCode,
+			'merch_order_id'  => $this->createMerchantOrderId(),
+			'trade_type'      => 'Checkout',
+			'title'           => $title,
+			'total_amount'    => $amountStr,
+			'trans_currency'  => 'ETB',
 			'timeout_express' => '120m',
 		];
-		
+
 		// Add redirect_url if configured (optional - for user redirect after payment)
-		if ($this->config->redirectUrl !== null) {
+		if ($this->config->redirectUrl !== null && !empty($this->config->redirectUrl)) {
 			$biz['redirect_url'] = $this->config->redirectUrl;
 		}
 
