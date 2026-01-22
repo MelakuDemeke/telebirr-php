@@ -48,22 +48,127 @@ You will receive the required information from Telebirr similar to:
 | ------------- | ---------- | ------ | ------- | ----------- | ------------ | ------------ |
 | owner name    | 6-digit    | UUID   | secret  | RSA key     | web payment  | gateway API  |
 
-Store these in environment variables or a config file, then create a `Melaku\Telebirr\Config`:
+### Environment-Based Configuration (Recommended)
+
+The library supports automatic environment detection for test and production URLs:
+
+**Option 1: Using environment helper methods**
 
 ```php
 use Melaku\Telebirr\Config;
 
-$config = new Config([
-    'baseUrl'       => 'https://developerportal.ethiotelebirr.et:38443/apiaccess/payment/gateway',
-    'webBaseUrl'    => 'https://developerportal.ethiotelebirr.et:38443/payment/web/paygate?',
+// For test/development environment
+$config = Config::forTest([
     'fabricAppId'   => getenv('TELEBIRR_FABRIC_APP_ID'),
     'appSecret'     => getenv('TELEBIRR_APP_SECRET'),
     'merchantAppId' => getenv('TELEBIRR_MERCHANT_APP_ID'),
     'merchantCode'  => getenv('TELEBIRR_MERCHANT_CODE'),
     'privateKey'    => getenv('TELEBIRR_PRIVATE_KEY_PEM'),
-    'notifyUrl'     => 'https://your-domain.com/telebirr/notify', // Required: server-to-server callback URL
-    'redirectUrl'   => 'https://your-domain.com/telebirr/return', // Optional: user redirect after payment
+    'notifyUrl'     => 'https://your-domain.com/telebirr/notify',
+    'redirectUrl'   => 'https://your-domain.com/telebirr/return',
 ]);
+
+// For production environment
+$config = Config::forProduction([
+    'fabricAppId'   => getenv('TELEBIRR_FABRIC_APP_ID'),
+    'appSecret'     => getenv('TELEBIRR_APP_SECRET'),
+    'merchantAppId' => getenv('TELEBIRR_MERCHANT_APP_ID'),
+    'merchantCode'  => getenv('TELEBIRR_MERCHANT_CODE'),
+    'privateKey'    => getenv('TELEBIRR_PRIVATE_KEY_PEM'),
+    'notifyUrl'     => 'https://your-domain.com/telebirr/notify',
+    'redirectUrl'   => 'https://your-domain.com/telebirr/return',
+]);
+```
+
+**Option 2: Automatic environment detection**
+
+```php
+use Melaku\Telebirr\Config;
+
+// Automatically detects from TELEBIRR_ENVIRONMENT or APP_ENV environment variable
+// Defaults to 'test' if not set
+$config = Config::fromEnvironment([
+    'fabricAppId'   => getenv('TELEBIRR_FABRIC_APP_ID'),
+    'appSecret'     => getenv('TELEBIRR_APP_SECRET'),
+    'merchantAppId' => getenv('TELEBIRR_MERCHANT_APP_ID'),
+    'merchantCode'  => getenv('TELEBIRR_MERCHANT_CODE'),
+    'privateKey'    => getenv('TELEBIRR_PRIVATE_KEY_PEM'),
+    'notifyUrl'     => 'https://your-domain.com/telebirr/notify',
+    'redirectUrl'   => 'https://your-domain.com/telebirr/return',
+]);
+
+// Set environment variable:
+// export TELEBIRR_ENVIRONMENT=production  # or 'test'
+// Or in .env file:
+// TELEBIRR_ENVIRONMENT=production
+```
+
+**Option 3: Explicit environment parameter**
+
+```php
+use Melaku\Telebirr\Config;
+
+$config = new Config([
+    'environment'   => 'production', // or 'test'
+    'fabricAppId'   => getenv('TELEBIRR_FABRIC_APP_ID'),
+    'appSecret'     => getenv('TELEBIRR_APP_SECRET'),
+    'merchantAppId' => getenv('TELEBIRR_MERCHANT_APP_ID'),
+    'merchantCode'  => getenv('TELEBIRR_MERCHANT_CODE'),
+    'privateKey'    => getenv('TELEBIRR_PRIVATE_KEY_PEM'),
+    'notifyUrl'     => 'https://your-domain.com/telebirr/notify',
+    'redirectUrl'   => 'https://your-domain.com/telebirr/return',
+]);
+```
+
+**Option 4: Manual URL configuration (backward compatible)**
+
+If you need to specify URLs manually or use custom URLs:
+
+```php
+use Melaku\Telebirr\Config;
+
+$config = new Config([
+    'baseUrl'       => 'https://developerportal.ethiotelebirr.et:38443/apiaccess/payment/gateway', // Test
+    // 'baseUrl'     => 'https://telebirrappcube.ethiomobilemoney.et:38443/apiaccess/payment/gateway', // Production
+    'webBaseUrl'    => 'https://developerportal.ethiotelebirr.et:38443/payment/web/paygate?', // Test
+    // 'webBaseUrl'  => 'https://telebirrappcube.ethiomobilemoney.et:38443/payment/web/paygate?', // Production
+    'fabricAppId'   => getenv('TELEBIRR_FABRIC_APP_ID'),
+    'appSecret'     => getenv('TELEBIRR_APP_SECRET'),
+    'merchantAppId' => getenv('TELEBIRR_MERCHANT_APP_ID'),
+    'merchantCode'  => getenv('TELEBIRR_MERCHANT_CODE'),
+    'privateKey'    => getenv('TELEBIRR_PRIVATE_KEY_PEM'),
+    'notifyUrl'     => 'https://your-domain.com/telebirr/notify',
+    'redirectUrl'   => 'https://your-domain.com/telebirr/return',
+]);
+```
+
+### Environment URLs
+
+The library automatically uses the correct URLs based on environment:
+
+- **Test/Development**: 
+  - API: `https://developerportal.ethiotelebirr.et:38443/apiaccess/payment/gateway`
+  - Web: `https://developerportal.ethiotelebirr.et:38443/payment/web/paygate?`
+
+- **Production**: 
+  - API: `https://telebirrappcube.ethiomobilemoney.et:38443/apiaccess/payment/gateway`
+  - Web: `https://telebirrappcube.ethiomobilemoney.et:38443/payment/web/paygate?`
+
+### Checking Current Environment
+
+```php
+// Check if using test environment
+if ($config->isTest()) {
+    echo "Using test environment";
+}
+
+// Check if using production environment
+if ($config->isProduction()) {
+    echo "Using production environment";
+}
+
+// Get current environment
+$env = $config->getEnvironment(); // Returns 'test' or 'production'
 ```
 
 **Important:** `notifyUrl` is **required**. This is where Telebirr will send payment status updates (success/failure) via POST requests. This endpoint should:
