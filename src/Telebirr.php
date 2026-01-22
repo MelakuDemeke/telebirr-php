@@ -226,6 +226,105 @@ class Telebirr
 	}
 
 	/**
+	 * Query order status – Telebirr H5 C2B queryOrder.
+	 *
+	 * Per Telebirr H5 C2B Web Payment Integration Quick Guide (queryOrder):
+	 * @see https://developer.ethiotelecom.et/docs/H5%20C2B%20Web%20Payment%20Integration%20Quick%20Guide/queryOrder
+	 *
+	 * This method queries the payment status of an order. You can query by either:
+	 * - prepay_id: The payment order ID returned from createOrder
+	 * - merch_order_id: Your merchant order ID
+	 *
+	 * API Specification:
+	 * - Endpoint: POST {baseUrl}/payment/v1/merchant/queryOrder
+	 * - Headers:
+	 *   - Content-Type: application/json
+	 *   - X-APP-Key: {fabricAppId}
+	 *   - Authorization: {fabricToken} (from applyFabricToken)
+	 * - Request Body:
+	 *   {
+	 *     "timestamp": "{timestamp}",
+	 *     "nonce_str": "{nonce_str}",
+	 *     "method": "payment.queryorder",
+	 *     "version": "1.0",
+	 *     "biz_content": {
+	 *       "appid": "{merchantAppId}",
+	 *       "merch_code": "{merchantCode}",
+	 *       "prepay_id": "{prepay_id}", // Optional if merch_order_id is provided
+	 *       "merch_order_id": "{merch_order_id}" // Optional if prepay_id is provided
+	 *     },
+	 *     "sign": "{signature}",
+	 *     "sign_type": "SHA256WithRSA"
+	 *   }
+	 * - Success Response: { "biz_content": { "trade_status": "...", "payment_order_id": "...", ... }, ... }
+	 * - Error Response: { "code": "...", "message": "...", ... }
+	 *
+	 * @param string      $fabricToken  "Bearer xxx" from applyFabricToken()
+	 * @param string|null $prepayId     Optional: prepay_id from createOrder response
+	 * @param string|null $merchOrderId Optional: merchant order ID (at least one must be provided)
+	 *
+	 * @return array Full API response (contains biz_content with order status on success)
+	 * @throws \RuntimeException on API errors, invalid responses, or if both prepayId and merchOrderId are null
+	 */
+	public function queryOrder(string $fabricToken, ?string $prepayId = null, ?string $merchOrderId = null): array
+	{
+		if (empty($prepayId) && empty($merchOrderId)) {
+			throw new \InvalidArgumentException('Either prepayId or merchOrderId must be provided');
+		}
+
+		$reqObject = $this->buildQueryOrderRequest($prepayId, $merchOrderId);
+
+		$url = $this->config->baseUrl . '/payment/v1/merchant/queryOrder';
+
+		$payload = json_encode($reqObject);
+
+		$ch = curl_init($url);
+		curl_setopt_array($ch, [
+			CURLOPT_CUSTOMREQUEST  => 'POST',
+			CURLOPT_RETURNTRANSFER => true,
+			CURLOPT_HTTPHEADER     => [
+				'Content-Type: application/json',
+				'X-APP-Key: ' . $this->config->fabricAppId,
+				'Authorization: ' . $fabricToken,
+			],
+			CURLOPT_POSTFIELDS     => $payload,
+			CURLOPT_SSL_VERIFYPEER => false,
+			CURLOPT_SSL_VERIFYHOST => false,
+		]);
+
+		$responseBody = curl_exec($ch);
+		$error        = curl_error($ch);
+		$httpCode     = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+		curl_close($ch);
+
+		if ($responseBody === false) {
+			throw new \RuntimeException('Failed to call query order API: ' . ($error ?: 'Unknown cURL error'));
+		}
+
+		// Validate HTTP status code (should be 200-299 for success)
+		if ($httpCode < 200 || $httpCode >= 300) {
+			throw new \RuntimeException(
+				'Query order API returned HTTP ' . $httpCode . ': ' . $responseBody
+			);
+		}
+
+		$result = json_decode($responseBody, true);
+		if (!is_array($result)) {
+			throw new \RuntimeException('Invalid query order API response (not JSON): ' . $responseBody);
+		}
+
+		// Check for API-level error responses
+		if (isset($result['code']) && $result['code'] !== '00000' && $result['code'] !== '0') {
+			$errorMsg = $result['message'] ?? $result['msg'] ?? 'Unknown error';
+			throw new \RuntimeException(
+				'Query order API error (code: ' . $result['code'] . '): ' . $errorMsg
+			);
+		}
+
+		return $result;
+	}
+
+	/**
 	 * High-level helper: applyFabricToken + createOrder + buildCheckoutUrl.
 	 *
 	 * This method performs all three steps of the Telebirr H5 C2B Web Payment Integration:
@@ -353,6 +452,48 @@ class Telebirr
 		];
 
 		return implode('&', $parts);
+	}
+
+	/**
+	 * Internal: build queryOrder request body per queryOrder spec.
+	 *
+	 * Builds the complete request object according to Telebirr H5 C2B Web Payment Integration
+	 * Quick Guide (queryOrder). All fields are properly formatted and signed.
+	 *
+	 * @param string|null $prepayId     Optional prepay_id
+	 * @param string|null $merchOrderId Optional merchant order ID
+	 * @return array Complete signed request object ready for JSON encoding
+	 */
+	private function buildQueryOrderRequest(?string $prepayId, ?string $merchOrderId): array
+	{
+		$req = [
+			'timestamp' => Signer::createTimeStamp(),
+			'nonce_str' => Signer::createNonceStr(),
+			'method'    => 'payment.queryorder',
+			'version'   => '1.0',
+		];
+
+		$biz = [
+			'appid'      => $this->config->merchantAppId,
+			'merch_code' => $this->config->merchantCode,
+		];
+
+		// Add prepay_id if provided
+		if (!empty($prepayId)) {
+			$biz['prepay_id'] = $prepayId;
+		}
+
+		// Add merch_order_id if provided
+		if (!empty($merchOrderId)) {
+			$biz['merch_order_id'] = $merchOrderId;
+		}
+
+		$req['biz_content'] = $biz;
+
+		$req['sign']      = $this->signer->signRequestObject($req);
+		$req['sign_type'] = 'SHA256WithRSA';
+
+		return $req;
 	}
 
 	private function createMerchantOrderId(): string

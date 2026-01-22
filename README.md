@@ -223,6 +223,59 @@ if ($isSuccess) {
 
 **Documentation**: See [CheckOut Guide](https://developer.ethiotelecom.et/docs/H5%20C2B%20Web%20Payment%20Integration%20Quick%20Guide/%20CheckOut)
 
+### queryOrder API Details
+
+The `queryOrder()` method implements the **queryOrder** endpoint from the Telebirr H5 C2B Web Payment Integration Quick Guide:
+
+- **Purpose**: Query the payment status of an order to verify payment completion or check order details
+- **Endpoint**: `POST {baseUrl}/payment/v1/merchant/queryOrder`
+- **Use Cases**:
+  - Verify payment status when user returns from Telebirr (before trusting return URL parameters)
+  - Check order status periodically (polling)
+  - Reconcile payments and handle edge cases
+  - Verify payment before fulfilling orders
+- **Query Options**: You can query by either:
+  - `prepay_id`: The payment order ID from `createOrder()` response
+  - `merch_order_id`: Your merchant order ID
+  - At least one must be provided
+- **Response**: Returns order details including:
+  - `trade_status`: Payment status (e.g., `PAY_SUCCESS`, `PAY_FAILED`, `PAY_CANCEL`)
+  - `payment_order_id`: Telebirr's payment order ID
+  - `merch_order_id`: Your merchant order ID
+  - `total_amount`: Payment amount
+  - `trans_currency`: Currency
+  - Other transaction details
+
+**Example Usage:**
+```php
+// After user returns from Telebirr, verify payment status
+$tokenInfo = $client->applyFabricToken();
+$fabricToken = $tokenInfo['token'];
+
+// Query by merchant order ID
+$orderStatus = $client->queryOrder($fabricToken, null, 'MY-ORDER-123');
+
+// Or query by prepay_id
+$orderStatus = $client->queryOrder($fabricToken, 'prepay_id_here', null);
+
+// Check payment status
+$tradeStatus = $orderStatus['biz_content']['trade_status'] ?? '';
+if (strtoupper($tradeStatus) === 'PAY_SUCCESS') {
+    // Payment successful - update database, fulfill order, etc.
+} else {
+    // Payment failed or pending
+}
+```
+
+**Important Notes:**
+- Always verify payment status using `queryOrder()` before trusting return URL parameters
+- The return URL can be accessed multiple times or by users who didn't complete payment
+- Use `queryOrder()` to get authoritative payment status from Telebirr
+- Implement proper error handling for API failures
+- Consider caching query results to avoid excessive API calls
+
+**Documentation**: See [queryOrder Guide](https://developer.ethiotelecom.et/docs/H5%20C2B%20Web%20Payment%20Integration%20Quick%20Guide/queryOrder)
+
 ## Webhook / Notification handling
 
 For server-to-server notifications (Telebirr calls your server), use a separate endpoint (e.g. `/telebirr/notify`):
