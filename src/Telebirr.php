@@ -201,7 +201,22 @@ class Telebirr
 	}
 
 	/**
-	 * Step 3: Build checkout URL from prepay_id.
+	 * Step 3: Generate checkout URL from prepay_id – Telebirr H5 C2B Generate_Check_Url.
+	 *
+	 * Per Telebirr H5 C2B Web Payment Integration Quick Guide (Generate_Check_Url):
+	 * @see https://developer.ethiotelecom.et/docs/H5%20C2B%20Web%20Payment%20Integration%20Quick%20Guide/Generate_Check_Url
+	 *
+	 * This method generates the final checkout URL that users will be redirected to for payment.
+	 * The URL is constructed by:
+	 * 1. Building a signed query string with required parameters (appid, merch_code, nonce_str, prepay_id, timestamp, sign, sign_type)
+	 * 2. Appending version=1.0&trade_type=Checkout
+	 * 3. Combining with the webBaseUrl to form the complete payment gateway URL
+	 *
+	 * URL Format:
+	 * {webBaseUrl}?appid={appid}&merch_code={merch_code}&nonce_str={nonce_str}&prepay_id={prepay_id}&timestamp={timestamp}&sign={sign}&sign_type=SHA256WithRSA&version=1.0&trade_type=Checkout
+	 *
+	 * @param string $prepayId The prepay_id obtained from createOrder() response (biz_content.prepay_id)
+	 * @return string Complete checkout URL ready for user redirect
 	 */
 	public function buildCheckoutUrl(string $prepayId): string
 	{
@@ -284,6 +299,23 @@ class Telebirr
 
 	/**
 	 * Internal: build raw request string for the web checkout URL.
+	 *
+	 * Builds the signed query string according to Telebirr H5 C2B Web Payment Integration
+	 * Quick Guide (Generate_Check_Url). This creates the parameter string that will be
+	 * appended to the webBaseUrl to form the complete checkout URL.
+	 *
+	 * Parameters included (in alphabetical order for signing):
+	 * - appid: Merchant application ID
+	 * - merch_code: Merchant code
+	 * - nonce_str: Random nonce string (32 characters)
+	 * - prepay_id: Prepayment ID from createOrder response
+	 * - timestamp: Unix timestamp
+	 *
+	 * The parameters are signed using RSA-PSS SHA256, and the signature is base64-encoded.
+	 * The final query string includes: appid, merch_code, nonce_str, prepay_id, timestamp, sign, sign_type
+	 *
+	 * @param string $prepayId The prepay_id from createOrder() response
+	 * @return string URL-encoded query string (without the base URL or ? prefix)
 	 */
 	private function buildRawCheckoutRequest(string $prepayId): string
 	{

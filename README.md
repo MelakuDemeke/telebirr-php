@@ -137,7 +137,9 @@ $order = $client->createOrder($fabricToken, $title, $amount);
 // - API error responses (code/message)
 // - Presence of prepay_id in biz_content
 
-// 3) Build checkout URL from prepay_id
+// 3) Generate checkout URL from prepay_id (Generate_Check_Url)
+// This calls the Generate_Check_Url step per H5 C2B Web Payment Integration spec
+// See: https://developer.ethiotelecom.et/docs/H5%20C2B%20Web%20Payment%20Integration%20Quick%20Guide/Generate_Check_Url
 $checkoutUrl = $client->buildCheckoutUrl($order['biz_content']['prepay_id']);
 header('Location: ' . $checkoutUrl);
 exit;
@@ -151,6 +153,21 @@ The `createOrder()` method implements the **requestCreateOrder** endpoint from t
 - **Request includes**: All required fields (`notify_url`, `appid`, `merch_code`, `merch_order_id`, `trade_type`, `title`, `total_amount`, `trans_currency`, `timeout_express`) plus optional `redirect_url`
 - **Response validation**: Automatically validates `biz_content.prepay_id` is present
 - **Error handling**: Comprehensive validation of HTTP status codes and API error responses
+
+### Generate_Check_Url API Details
+
+The `buildCheckoutUrl()` method implements the **Generate_Check_Url** step from the Telebirr H5 C2B Web Payment Integration Quick Guide:
+
+- **Purpose**: Generates the final checkout URL that users will be redirected to for payment
+- **Input**: `prepay_id` obtained from `createOrder()` response (`biz_content.prepay_id`)
+- **Process**:
+  1. Builds a signed query string with parameters: `appid`, `merch_code`, `nonce_str`, `prepay_id`, `timestamp`
+  2. Signs the parameters using RSA-PSS SHA256 (same signing method as requestCreateOrder)
+  3. Appends `sign` and `sign_type=SHA256WithRSA` to the query string
+  4. Adds `version=1.0&trade_type=Checkout` parameters
+  5. Combines with `webBaseUrl` to form the complete payment gateway URL
+- **URL Format**: `{webBaseUrl}?appid={appid}&merch_code={merch_code}&nonce_str={nonce_str}&prepay_id={prepay_id}&timestamp={timestamp}&sign={sign}&sign_type=SHA256WithRSA&version=1.0&trade_type=Checkout`
+- **Documentation**: See [Generate_Check_Url Guide](https://developer.ethiotelecom.et/docs/H5%20C2B%20Web%20Payment%20Integration%20Quick%20Guide/Generate_Check_Url)
 
 ## Webhook / Notification handling
 
