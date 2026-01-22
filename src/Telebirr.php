@@ -22,7 +22,14 @@ class Telebirr
 	/**
 	 * Step 1: Apply fabric token.
 	 *
+	 * According to Telebirr H5 C2B Web Payment Integration documentation:
+	 * - Endpoint: POST /payment/v1/token
+	 * - Headers: Content-Type: application/json, X-APP-Key: {fabricAppId}
+	 * - Body: { "appSecret": "{appSecret}" }
+	 * - Response: { "token": "Bearer xxx", "effectiveDate": "...", "expirationDate": "..." }
+	 *
 	 * @return array { token, effectiveDate, expirationDate, ... }
+	 * @throws \RuntimeException on API errors or invalid responses
 	 */
 	public function applyFabricToken(): array
 	{
@@ -47,15 +54,38 @@ class Telebirr
 
 		$responseBody = curl_exec($ch);
 		$error        = curl_error($ch);
+		$httpCode     = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 		curl_close($ch);
 
 		if ($responseBody === false) {
-			throw new \RuntimeException('Failed to call token API: ' . $error);
+			throw new \RuntimeException('Failed to call token API: ' . ($error ?: 'Unknown cURL error'));
+		}
+
+		// Validate HTTP status code (should be 200-299 for success)
+		if ($httpCode < 200 || $httpCode >= 300) {
+			throw new \RuntimeException(
+				'Token API returned HTTP ' . $httpCode . ': ' . $responseBody
+			);
 		}
 
 		$result = json_decode($responseBody, true);
 		if (!is_array($result)) {
-			throw new \RuntimeException('Invalid token API response: ' . $responseBody);
+			throw new \RuntimeException('Invalid token API response (not JSON): ' . $responseBody);
+		}
+
+		// Check for API-level error responses
+		if (isset($result['code']) && $result['code'] !== '00000' && $result['code'] !== '0') {
+			$errorMsg = $result['message'] ?? $result['msg'] ?? 'Unknown error';
+			throw new \RuntimeException(
+				'Token API error (code: ' . $result['code'] . '): ' . $errorMsg
+			);
+		}
+
+		// Validate that token exists in response
+		if (empty($result['token'])) {
+			throw new \RuntimeException(
+				'Token missing in API response. Response: ' . json_encode($result)
+			);
 		}
 
 		return $result;
@@ -69,6 +99,7 @@ class Telebirr
 	 * @param string|int|float $amount  Total amount
 	 *
 	 * @return array Full API response (should contain biz_content.prepay_id on success)
+	 * @throws \RuntimeException on API errors or invalid responses
 	 */
 	public function createOrder(string $fabricToken, string $title, $amount): array
 	{
@@ -94,15 +125,31 @@ class Telebirr
 
 		$responseBody = curl_exec($ch);
 		$error        = curl_error($ch);
+		$httpCode     = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 		curl_close($ch);
 
 		if ($responseBody === false) {
-			throw new \RuntimeException('Failed to call create order API: ' . $error);
+			throw new \RuntimeException('Failed to call create order API: ' . ($error ?: 'Unknown cURL error'));
+		}
+
+		// Validate HTTP status code (should be 200-299 for success)
+		if ($httpCode < 200 || $httpCode >= 300) {
+			throw new \RuntimeException(
+				'Create order API returned HTTP ' . $httpCode . ': ' . $responseBody
+			);
 		}
 
 		$result = json_decode($responseBody, true);
 		if (!is_array($result)) {
-			throw new \RuntimeException('Invalid create order API response: ' . $responseBody);
+			throw new \RuntimeException('Invalid create order API response (not JSON): ' . $responseBody);
+		}
+
+		// Check for API-level error responses
+		if (isset($result['code']) && $result['code'] !== '00000' && $result['code'] !== '0') {
+			$errorMsg = $result['message'] ?? $result['msg'] ?? 'Unknown error';
+			throw new \RuntimeException(
+				'Create order API error (code: ' . $result['code'] . '): ' . $errorMsg
+			);
 		}
 
 		return $result;
