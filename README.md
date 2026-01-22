@@ -31,6 +31,7 @@ This library focuses on the **Web Checkout (C2B)** flow and provides a modern, e
   - [Basic usage (recommended)](#basic-usage-recommended)
   - [Advanced usage (manual steps)](#advanced-usage-manual-steps)
   - [Webhook / Notification handling](#webhook--notification-handling)
+  - [Request Signature Process](#request-signature-process)
   - [Security & Requirements](#security--requirements)
 
 ## Installation
@@ -350,6 +351,18 @@ if (strtoupper($refundStatus) === 'SUCCESS' || strtoupper($refundStatus) === 'PR
   - The RefundOrder API is enabled for your account
   - You're using the correct base URL (development vs. production)
   - Your account has refund permissions
+- **Error Code 60320025** ("The merchant failed to call the payment platform to refund"):
+  - This error typically means the refund request was properly formatted but rejected by the platform
+  - **Common causes:**
+    - You're using a development/sandbox environment where refunds may not be enabled
+    - Your account doesn't have refund permissions enabled
+    - The original payment is not eligible for refund (not completed, too old, already refunded, etc.)
+    - You need to use the production environment for refunds
+  - **Solutions:**
+    - Verify you're using the correct base URL (production vs development)
+    - Ensure the original payment was successfully completed
+    - Contact Telebirr support to enable refund capabilities for your account
+    - Try using the production environment if you're currently in development
 - **Base URLs**:
   - Development: `https://developerportal.ethiotelebirr.et:38443/apiaccess/payment/gateway`
   - Production: `https://telebirrappcube.ethiomobilemoney.et:38443/apiaccess/payment/gateway`
@@ -708,6 +721,69 @@ The guide includes:
 - Error handling strategies
 - Security best practices
 - Troubleshooting guide
+
+## Request Signature Process
+
+The library implements the **Request Signature Process** per the Telebirr H5 C2B Web Payment Integration Quick Guide:
+
+**Documentation**: See [Request Signature Process Guide](https://developer.ethiotelecom.et/docs/H5%20C2B%20Web%20Payment%20Integration%20Quick%20Guide/Request_signature_Process)
+
+### Signature Generation Steps
+
+1. **Collect Fields**: Gather all fields from the request object (excluding excluded fields)
+2. **Flatten biz_content**: All fields within `biz_content` are flattened into the main field list
+3. **Sort Fields**: Sort all fields alphabetically (ASCII order)
+4. **Build Canonical String**: Create string in format `key1=value1&key2=value2&...`
+5. **Sign**: Sign the canonical string using RSA-PSS SHA256 (SHA256withRSAandMGF1)
+6. **Encode**: Return base64-encoded signature
+
+### Excluded Fields
+
+The following fields are **NOT** included in the signature:
+- `sign` - The signature field itself
+- `sign_type` - Signature type field
+- `header` - Header information
+- `refund_info` - Refund information (legacy)
+- `openType` - Open type field
+- `raw_request` - Raw request field
+- `biz_content` - The wrapper field (but its **contents** ARE included)
+
+### Important Notes
+
+- ✅ All fields **within** `biz_content` **MUST** participate in the signature
+- ✅ Fields are sorted **alphabetically** before signing
+- ✅ Uses **RSA-PSS padding** with **SHA256** hash and **MGF1**
+- ✅ Salt length is **32 bytes** (equal to hash length for SHA256)
+- ✅ Signature is **base64-encoded** before being added to the request
+
+### Example Signature Process
+
+```php
+// Request object
+$request = [
+    'timestamp' => '1234567890',
+    'nonce_str' => 'ABC123',
+    'method' => 'payment.preorder',
+    'version' => '1.0',
+    'biz_content' => [
+        'appid' => 'YOUR_APP_ID',
+        'merch_code' => 'YOUR_MERCH_CODE',
+        'title' => 'Test Order',
+        'total_amount' => '100.00'
+    ]
+];
+
+// Step 1-3: Collect and sort fields (excluding excluded fields)
+// Fields: appid, merch_code, method, nonce_str, timestamp, title, total_amount, version
+
+// Step 4: Build canonical string
+// "appid=YOUR_APP_ID&merch_code=YOUR_MERCH_CODE&method=payment.preorder&nonce_str=ABC123&timestamp=1234567890&title=Test Order&total_amount=100.00&version=1.0"
+
+// Step 5-6: Sign and encode
+// Signature = base64(RSA-PSS-SHA256(canonical_string))
+```
+
+The `Signer` class handles all of this automatically - you don't need to manually calculate signatures.
 
 ## Security & Requirements
 

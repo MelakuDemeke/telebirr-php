@@ -436,9 +436,26 @@ class Telebirr
 
 		// Check for API-level error responses
 		if (isset($result['code']) && $result['code'] !== '00000' && $result['code'] !== '0') {
-			$errorMsg = $result['message'] ?? $result['msg'] ?? 'Unknown error';
+			$errorMsg = $result['message'] ?? $result['msg'] ?? $result['errorMsg'] ?? 'Unknown error';
+			$errorCode = $result['code'] ?? $result['errorCode'] ?? 'Unknown';
+			
+			// Provide helpful context for common error codes
+			$errorContext = '';
+			if ($errorCode === '60320025' || strpos($errorMsg, 'failed to call the payment platform') !== false) {
+				$errorContext = "\n\n⚠️ This error typically indicates:\n";
+				$errorContext .= "1. You may be using a development/sandbox environment where refunds are not enabled\n";
+				$errorContext .= "2. Your account may not have refund permissions enabled\n";
+				$errorContext .= "3. The original payment may not be eligible for refund (e.g., not completed, too old, etc.)\n";
+				$errorContext .= "4. You may need to use the production environment for refunds\n";
+				$errorContext .= "\nPlease verify:\n";
+				$errorContext .= "- You're using the correct base URL (production vs development)\n";
+				$errorContext .= "- Your account has refund capabilities enabled\n";
+				$errorContext .= "- The original payment was successfully completed\n";
+				$errorContext .= "- Contact Telebirr support if refunds are required for your account";
+			}
+			
 			throw new \RuntimeException(
-				'Refund order API error (code: ' . $result['code'] . '): ' . $errorMsg
+				'Refund order API error (code: ' . $errorCode . '): ' . $errorMsg . $errorContext
 			);
 		}
 
