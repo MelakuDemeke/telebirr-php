@@ -325,6 +325,127 @@ class Telebirr
 	}
 
 	/**
+	 * Refund order – Telebirr H5 C2B RefundOrder.
+	 *
+	 * Per Telebirr H5 C2B Web Payment Integration Quick Guide (RefundOrder):
+	 * @see https://developer.ethiotelecom.et/docs/H5%20C2B%20Web%20Payment%20Integration%20Quick%20Guide/RefundOrder
+	 *
+	 * This method initiates a refund for a completed payment. You can refund by either:
+	 * - payment_order_id: The payment order ID from Telebirr
+	 * - merch_order_id: Your merchant order ID
+	 *
+	 * API Specification:
+	 * - Endpoint: POST {baseUrl}/payment/v1/merchant/refund
+	 * - Headers:
+	 *   - Content-Type: application/json
+	 *   - X-APP-Key: {fabricAppId}
+	 *   - Authorization: {fabricToken} (from applyFabricToken)
+	 * - Request Body:
+	 *   {
+	 *     "timestamp": "{timestamp}",
+	 *     "nonce_str": "{nonce_str}",
+	 *     "method": "payment.refund",
+	 *     "version": "1.0",
+	 *     "biz_content": {
+	 *       "appid": "{merchantAppId}",
+	 *       "merch_code": "{merchantCode}",
+	 *       "refund_amount": "{refund_amount}", // String with 2 decimal places
+	 *       "refund_request_no": "{refund_request_no}", // Required: refund request number
+	 *       "payment_order_id": "{payment_order_id}", // Optional if merch_order_id is provided
+	 *       "merch_order_id": "{merch_order_id}", // Optional if payment_order_id is provided
+	 *       "refund_reason": "{refund_reason}", // Optional
+	 *       "refund_order_id": "{refund_order_id}" // Optional
+	 *     },
+	 *     "sign": "{signature}",
+	 *     "sign_type": "SHA256WithRSA"
+	 *   }
+	 * - Success Response: { "biz_content": { "refund_order_id": "...", "refund_status": "...", ... }, ... }
+	 * - Error Response: { "code": "...", "message": "...", ... }
+	 *
+	 * @param string      $fabricToken  "Bearer xxx" from applyFabricToken()
+	 * @param string|int|float $refundAmount  Refund amount (ETB) - will be formatted to 2 decimals
+	 * @param string|null $paymentOrderId Optional: payment_order_id from Telebirr
+	 * @param string|null $merchOrderId   Optional: merchant order ID (at least one must be provided)
+	 * @param string|null $refundReason   Optional: reason for refund
+	 * @param string|null $refundOrderId  Optional: refund_request_no (required by API, auto-generated if null)
+	 *
+	 * @return array Full API response (contains biz_content with refund status on success)
+	 * @throws \RuntimeException on API errors, invalid responses, or if both paymentOrderId and merchOrderId are null
+	 */
+	public function refundOrder(string $fabricToken, $refundAmount, ?string $paymentOrderId = null, ?string $merchOrderId = null, ?string $refundReason = null, ?string $refundOrderId = null): array
+	{
+		if (empty($paymentOrderId) && empty($merchOrderId)) {
+			throw new \InvalidArgumentException('Either paymentOrderId or merchOrderId must be provided');
+		}
+
+		$reqObject = $this->buildRefundOrderRequest($refundAmount, $paymentOrderId, $merchOrderId, $refundReason, $refundOrderId);
+
+		// Endpoint path per official RefundOrder documentation
+		$url = $this->config->baseUrl . '/payment/v1/merchant/refund';
+
+		$payload = json_encode($reqObject);
+
+		$ch = curl_init($url);
+		curl_setopt_array($ch, [
+			CURLOPT_CUSTOMREQUEST  => 'POST',
+			CURLOPT_RETURNTRANSFER => true,
+			CURLOPT_HTTPHEADER     => [
+				'Content-Type: application/json',
+				'X-APP-Key: ' . $this->config->fabricAppId,
+				'Authorization: ' . $fabricToken,
+			],
+			CURLOPT_POSTFIELDS     => $payload,
+			CURLOPT_SSL_VERIFYPEER => false,
+			CURLOPT_SSL_VERIFYHOST => false,
+		]);
+
+		$responseBody = curl_exec($ch);
+		$error        = curl_error($ch);
+		$httpCode     = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+		curl_close($ch);
+
+		if ($responseBody === false) {
+			throw new \RuntimeException('Failed to call refund order API: ' . ($error ?: 'Unknown cURL error'));
+		}
+
+		// Validate HTTP status code (should be 200-299 for success)
+		if ($httpCode < 200 || $httpCode >= 300) {
+			$errorDetails = '';
+			if ($httpCode === 404) {
+				$errorDetails = "\n\n⚠️ 404 Error - Endpoint Not Found\n";
+				$errorDetails .= "The refund endpoint might not be available for your account.\n\n";
+				$errorDetails .= "Current endpoint being called: " . $url . "\n\n";
+				$errorDetails .= "Please verify:\n";
+				$errorDetails .= "1. Check the official RefundOrder documentation:\n";
+				$errorDetails .= "   https://developer.ethiotelecom.et/docs/H5%20C2B%20Web%20Payment%20Integration%20Quick%20Guide/RefundOrder\n\n";
+				$errorDetails .= "2. Verify that the RefundOrder API is enabled for your account\n\n";
+				$errorDetails .= "3. Check that you're using the correct base URL:\n";
+				$errorDetails .= "   - Development: https://developerportal.ethiotelebirr.et:38443/apiaccess/payment/gateway\n";
+				$errorDetails .= "   - Production: https://telebirrappcube.ethiomobilemoney.et:38443/apiaccess/payment/gateway\n\n";
+				$errorDetails .= "4. Contact Telebirr support if refunds are not available for your account.";
+			}
+			throw new \RuntimeException(
+				'Refund order API returned HTTP ' . $httpCode . ': ' . $responseBody . $errorDetails
+			);
+		}
+
+		$result = json_decode($responseBody, true);
+		if (!is_array($result)) {
+			throw new \RuntimeException('Invalid refund order API response (not JSON): ' . $responseBody);
+		}
+
+		// Check for API-level error responses
+		if (isset($result['code']) && $result['code'] !== '00000' && $result['code'] !== '0') {
+			$errorMsg = $result['message'] ?? $result['msg'] ?? 'Unknown error';
+			throw new \RuntimeException(
+				'Refund order API error (code: ' . $result['code'] . '): ' . $errorMsg
+			);
+		}
+
+		return $result;
+	}
+
+	/**
 	 * High-level helper: applyFabricToken + createOrder + buildCheckoutUrl.
 	 *
 	 * This method performs all three steps of the Telebirr H5 C2B Web Payment Integration:
@@ -486,6 +607,73 @@ class Telebirr
 		// Add merch_order_id if provided
 		if (!empty($merchOrderId)) {
 			$biz['merch_order_id'] = $merchOrderId;
+		}
+
+		$req['biz_content'] = $biz;
+
+		$req['sign']      = $this->signer->signRequestObject($req);
+		$req['sign_type'] = 'SHA256WithRSA';
+
+		return $req;
+	}
+
+	/**
+	 * Internal: build refundOrder request body per RefundOrder spec.
+	 *
+	 * Builds the complete request object according to Telebirr H5 C2B Web Payment Integration
+	 * Quick Guide (RefundOrder). All fields are properly formatted and signed.
+	 *
+	 * @param string|int|float $refundAmount  Refund amount (will be formatted to string with 2 decimals)
+	 * @param string|null $paymentOrderId Optional payment_order_id
+	 * @param string|null $merchOrderId   Optional merchant order ID
+	 * @param string|null $refundReason   Optional refund reason
+	 * @param string|null $refundOrderId  Used for refund_request_no (required by API, auto-generated if null)
+	 * @return array Complete signed request object ready for JSON encoding
+	 */
+	private function buildRefundOrderRequest($refundAmount, ?string $paymentOrderId, ?string $merchOrderId, ?string $refundReason, ?string $refundOrderId): array
+	{
+		// API expects refund_amount as string with 2 decimals
+		$refundAmountStr = is_numeric($refundAmount)
+			? number_format((float) $refundAmount, 2, '.', '')
+			: (string) $refundAmount;
+
+		$req = [
+			'timestamp' => Signer::createTimeStamp(),
+			'nonce_str' => Signer::createNonceStr(),
+			'method'    => 'payment.refund',
+			'version'   => '1.0',
+		];
+
+		// Generate refund_request_no (required) - use provided refundOrderId or auto-generate
+		$refundRequestNo = $refundOrderId !== null && $refundOrderId !== '' 
+			? $refundOrderId 
+			: $this->createMerchantOrderId();
+
+		$biz = [
+			'appid'        => $this->config->merchantAppId,
+			'merch_code'   => $this->config->merchantCode,
+			'refund_amount' => $refundAmountStr,
+			'refund_request_no' => $refundRequestNo, // Required parameter
+		];
+
+		// Add payment_order_id if provided
+		if (!empty($paymentOrderId)) {
+			$biz['payment_order_id'] = $paymentOrderId;
+		}
+
+		// Add merch_order_id if provided
+		if (!empty($merchOrderId)) {
+			$biz['merch_order_id'] = $merchOrderId;
+		}
+
+		// Add refund_reason if provided
+		if (!empty($refundReason)) {
+			$biz['refund_reason'] = $refundReason;
+		}
+
+		// Add refund_order_id if provided (optional field, separate from refund_request_no)
+		if ($refundOrderId !== null && $refundOrderId !== '') {
+			$biz['refund_order_id'] = $refundOrderId;
 		}
 
 		$req['biz_content'] = $biz;

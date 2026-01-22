@@ -276,47 +276,424 @@ if (strtoupper($tradeStatus) === 'PAY_SUCCESS') {
 
 **Documentation**: See [queryOrder Guide](https://developer.ethiotelecom.et/docs/H5%20C2B%20Web%20Payment%20Integration%20Quick%20Guide/queryOrder)
 
-## Webhook / Notification handling
+### RefundOrder API Details
 
-For server-to-server notifications (Telebirr calls your server), use a separate endpoint (e.g. `/telebirr/notify`):
+The `refundOrder()` method implements the **RefundOrder** endpoint from the Telebirr H5 C2B Web Payment Integration Quick Guide:
+
+- **Purpose**: Initiate a refund for a completed payment transaction
+- **Endpoint**: `POST {baseUrl}/payment/v1/merchant/refund`
+- **Use Cases**:
+  - Process customer refunds for returned items
+  - Handle order cancellations after payment
+  - Partial refunds (refund less than the original amount)
+  - Full refunds (refund the entire payment amount)
+- **Refund Options**: You can refund by either:
+  - `payment_order_id`: The payment order ID from Telebirr (from payment notification or queryOrder)
+  - `merch_order_id`: Your merchant order ID
+  - At least one must be provided
+- **Refund Amount**: Can be partial (less than original) or full (equal to original payment)
+- **Response**: Returns refund details including:
+  - `refund_order_id`: Your refund order ID
+  - `refund_status`: Refund processing status
+  - `refund_amount`: Amount being refunded
+  - `payment_order_id`: Original payment order ID
+  - Other refund transaction details
+
+**Example Usage:**
+```php
+// After verifying payment was successful, process a refund
+$tokenInfo = $client->applyFabricToken();
+$fabricToken = $tokenInfo['token'];
+
+// Full refund by merchant order ID
+$refundResult = $client->refundOrder(
+    $fabricToken,
+    '100.00',              // Refund amount (full refund)
+    null,                  // payment_order_id (not provided)
+    'MY-ORDER-123',        // merch_order_id
+    'Customer requested refund', // Optional: refund reason
+    'REFUND-001'           // Optional: your refund order ID
+);
+
+// Partial refund by payment order ID
+$refundResult = $client->refundOrder(
+    $fabricToken,
+    '50.00',               // Partial refund amount
+    'PAYMENT-ORDER-123',   // payment_order_id
+    null,                  // merch_order_id (not provided)
+    'Partial refund for returned item'
+);
+
+// Check refund status
+$refundStatus = $refundResult['biz_content']['refund_status'] ?? '';
+if (strtoupper($refundStatus) === 'SUCCESS' || strtoupper($refundStatus) === 'PROCESSING') {
+    // Refund initiated successfully
+    $refundOrderId = $refundResult['biz_content']['refund_order_id'] ?? '';
+    // Update your database, notify customer, etc.
+} else {
+    // Refund failed
+    // Handle error
+}
+```
+
+**Important Notes:**
+- Refunds can only be processed for successfully completed payments
+- You can refund the full amount or a partial amount (less than original)
+- Refund processing may take time - check status using queryOrder if needed
+- Always verify the original payment was successful before processing refund
+- Store refund_order_id for tracking and reconciliation
+- Implement proper error handling for refund failures
+- Consider business logic (e.g., refund policy, time limits)
+
+**Troubleshooting:**
+- **404 Error**: If you get a 404 error ("can not find api"), verify that:
+  - The RefundOrder API is enabled for your account
+  - You're using the correct base URL (development vs. production)
+  - Your account has refund permissions
+- **Base URLs**:
+  - Development: `https://developerportal.ethiotelebirr.et:38443/apiaccess/payment/gateway`
+  - Production: `https://telebirrappcube.ethiomobilemoney.et:38443/apiaccess/payment/gateway`
+
+**Documentation**: See [RefundOrder Guide](https://developer.ethiotelecom.et/docs/H5%20C2B%20Web%20Payment%20Integration%20Quick%20Guide/RefundOrder)
+
+## Webhook / Notification handling (Notify_Callback)
+
+The **Notify_Callback** is a critical component of the Telebirr H5 C2B Web Payment Integration. This is where Telebirr sends server-to-server payment status notifications.
+
+### Quick Answer: What Does the Notify Class Do?
+
+**For H5 C2B (this library):**
+- ❌ **You DON'T use the `Notify` class**
+- ✅ Telebirr sends **plain JSON** - just use `json_decode()`
+- ✅ **No decryption needed**
+
+**For Legacy API (old Telebirr):**
+- ✅ **You DO use the `Notify` class**
+- ✅ Telebirr sends **encrypted data** - decrypt it first
+- ✅ Then parse the decrypted JSON
+
+**Bottom line**: If you're using this library, Telebirr sends JSON directly. Just parse it. The `Notify` class is only for old legacy integrations.
+
+### How Server-to-Server Notifications Work
+
+**Important**: This is **NOT** something the user does. This is **automatic communication between Telebirr's server and your server**.
+
+Here's how it works:
+
+```
+1. User completes payment on Telebirr payment page
+   ↓
+2. Telebirr's server automatically sends a POST request to YOUR notifyUrl
+   (e.g., https://your-domain.com/telebirr/notify)
+   ↓
+3. YOUR server receives the notification
+   ↓
+4. YOUR server processes it (update database, send email, etc.)
+   ↓
+5. YOUR server returns a JSON response to Telebirr
+```
+
+**Key Points:**
+- **No user involvement**: The user doesn't send anything. Telebirr's server calls your server automatically.
+- **Automatic**: Happens in the background after payment completion.
+- **Server-to-server**: Direct communication between Telebirr's server and your server.
+- **Your endpoint**: You create a PHP file (e.g., `notify.php`) that receives and processes the notification.
+
+### Two Types of Notifications
+
+| Feature | H5 C2B (Current/New) ✅ | Legacy API (Old) |
+|---------|------------------------|------------------|
+| **Format** | Plain JSON | RSA-encrypted (base64) |
+| **Decryption needed?** | ❌ No | ✅ Yes |
+| **Notify class needed?** | ❌ No | ✅ Yes |
+| **Code example** | `json_decode(file_get_contents('php://input'), true)` | `new Notify($key, $data)->getPaymentInfo()` |
+| **This library uses** | ✅ H5 C2B | ❌ Legacy |
+
+#### 1. H5 C2B Web Payment (Current/New) - JSON Format ✅
+
+**For the H5 C2B Web Payment Integration (which this library uses):**
+- Telebirr sends **plain JSON data** (not encrypted)
+- You just parse the JSON - **NO decryption needed**
+- The `Notify` class is **NOT needed** for H5 C2B
+
+**What happens:**
+```
+Telebirr Server → POST request → Your notify.php
+   (sends JSON)                    (receives JSON)
+```
+
+**Example of what Telebirr sends:**
+```json
+{
+  "trade_status": "PAY_SUCCESS",
+  "payment_order_id": "123456789",
+  "merch_order_id": "MY-ORDER-123",
+  "total_amount": "100.00",
+  "trans_currency": "ETB",
+  "trans_end_time": "2024-01-01 12:00:00",
+  "notify_time": "2024-01-01 12:00:01",
+  "appid": "your-app-id",
+  "merch_code": "your-merchant-code",
+  "sign": "signature-here",
+  "sign_type": "SHA256WithRSA"
+}
+```
+
+**Your code (simple - no decryption):**
+```php
+// notify.php - Your endpoint
+$rawData = file_get_contents('php://input'); // Get what Telebirr sent
+$notification = json_decode($rawData, true); // Parse JSON - that's it!
+// ✅ Done! No decryption needed for H5 C2B!
+
+// Now use the data
+$status = $notification['trade_status'];
+$orderId = $notification['merch_order_id'];
+// ... process payment ...
+```
+
+#### 2. Legacy API - Encrypted Format (Old) ⚠️
+
+**For older Telebirr API integrations (NOT what this library uses):**
+- Telebirr sends **RSA-encrypted data** (base64-encoded)
+- You need to **decrypt it** using the `Notify` class
+- This is **only for legacy integrations**, not H5 C2B
+
+**What happens:**
+```
+Telebirr Server → POST request → Your notify.php
+   (sends encrypted)              (must decrypt first)
+```
+
+**Example of what Telebirr sends (legacy):**
+```
+(base64-encoded encrypted string like: "aBc123XyZ...")
+```
+
+**Your code (requires decryption):**
+```php
+// notify.php - Legacy API only
+$encryptedData = file_get_contents('php://input'); // Encrypted data
+
+// Step 1: Decrypt using Notify class
+$notify = new Notify($publicKey, $encryptedData);
+$json = $notify->getPaymentInfo(); // Decrypt to get JSON string
+
+// Step 2: Parse the decrypted JSON
+$notification = json_decode($json, true); // Now parse JSON
+
+// Now use the data
+$status = $notification['trade_status'];
+// ... process payment ...
+```
+
+**⚠️ Important**: If you're using this library (`melaku/telebirr`), you're using H5 C2B, so you **don't need** the `Notify` class. Only use it if you're integrating with the old legacy Telebirr API.
+
+### Notify_Callback Overview
+
+Per Telebirr H5 C2B Web Payment Integration Quick Guide (Notify_Callback):
+- **Purpose**: Receive asynchronous payment status updates from Telebirr
+- **Type**: Server-to-server POST request (not user-facing)
+- **When**: Telebirr sends notifications when payment status changes (success, failure, cancellation)
+- **URL**: Configured in `notifyUrl` when creating orders
+- **Format**: JSON payload in POST request body (for H5 C2B)
+- **Response**: Your endpoint must return a JSON response acknowledging receipt
+
+**Documentation**: See [Notify_Callback Guide](https://developer.ethiotelecom.et/docs/H5%20C2B%20Web%20Payment%20Integration%20Quick%20Guide/Notify_Callback)
+
+### Notification Endpoint Implementation
+
+Create a secure endpoint (e.g., `/telebirr/notify.php`) on your server. **Telebirr will automatically call this URL** when payment status changes.
+
+**Important**: 
+- This file runs on **YOUR server**
+- Telebirr's server **automatically calls it** (you don't call it)
+- The user **never sees or interacts with this file**
+- It's **server-to-server communication**
 
 ```php
-// notify.php
+// notify.php - This file is on YOUR server
+// Telebirr's server will POST to this URL automatically
+
 require 'vendor/autoload.php';
 
-use Melaku\Telebirr\Config;
-
-$config = new Config([/* same as before */]);
-
+// Set JSON content type for response
 header('Content-Type: application/json');
 
-$rawData = file_get_contents('php://input');
+// Step 1: Get what Telebirr sent (it's already JSON for H5 C2B)
+$rawData = file_get_contents('php://input'); // Raw POST data from Telebirr
+
+// Step 2: Parse the JSON (NO decryption needed for H5 C2B!)
 $notification = json_decode($rawData, true);
 
-// TODO: verify signature if Telebirr provides it
-// TODO: implement idempotency (do not process same payment twice)
+// Log notification for audit (important for debugging and compliance)
+error_log('Telebirr Notification Received: ' . $rawData);
 
-// Example fields (check Telebirr docs):
-// $prepayId      = $notification['prepay_id'] ?? null;
-// $status        = $notification['status'] ?? null;
-// $merchOrderId  = $notification['merch_order_id'] ?? null;
+// Prepare response
+$response = [
+    'success' => false,
+    'message' => '',
+];
 
-// Update your DB, mark order paid/failed, etc.
+try {
+    // Validate notification data
+    if (empty($notification)) {
+        throw new \RuntimeException('Invalid notification data');
+    }
 
-echo json_encode(['success' => true, 'message' => 'Notification processed']);
+    // Extract notification fields (per Notify_Callback spec)
+    $tradeStatus = $notification['trade_status'] ?? '';
+    $paymentOrderId = $notification['payment_order_id'] ?? '';
+    $merchOrderId = $notification['merch_order_id'] ?? '';
+    $totalAmount = $notification['total_amount'] ?? '';
+    $transCurrency = $notification['trans_currency'] ?? '';
+    $transEndTime = $notification['trans_end_time'] ?? '';
+    $notifyTime = $notification['notify_time'] ?? '';
+    $appid = $notification['appid'] ?? '';
+    $merchCode = $notification['merch_code'] ?? '';
+    $sign = $notification['sign'] ?? '';
+    $signType = $notification['sign_type'] ?? '';
+
+    // TODO: Verify signature if Telebirr provides signature verification
+    // This is critical for security - verify that the notification actually came from Telebirr
+    // if (!verifySignature($notification, $sign, $signType)) {
+    //     throw new \RuntimeException('Invalid signature');
+    // }
+
+    // TODO: Implement idempotency check (CRITICAL)
+    // Check if you've already processed this notification using payment_order_id or merch_order_id
+    // This prevents processing the same payment multiple times
+    // if (isNotificationProcessed($paymentOrderId)) {
+    //     $response['success'] = true;
+    //     $response['message'] = 'Notification already processed';
+    //     echo json_encode($response);
+    //     exit;
+    // }
+
+    // Process notification based on trade_status
+    switch (strtoupper($tradeStatus)) {
+        case 'PAY_SUCCESS':
+        case 'SUCCESS':
+            // Payment successful
+            // TODO: Update your database - mark order as paid
+            // TODO: Fulfill the order (send email, update inventory, etc.)
+            // TODO: Mark notification as processed (for idempotency)
+            
+            error_log("Payment successful - payment_order_id: {$paymentOrderId}, merch_order_id: {$merchOrderId}, amount: {$totalAmount}");
+            
+            $response['success'] = true;
+            $response['message'] = 'Payment notification processed successfully';
+            break;
+            
+        case 'PAY_FAILED':
+        case 'FAILED':
+            // Payment failed
+            // TODO: Update your database - mark order as failed
+            // TODO: Notify customer if needed
+            // TODO: Mark notification as processed
+            
+            error_log("Payment failed - payment_order_id: {$paymentOrderId}, merch_order_id: {$merchOrderId}");
+            
+            $response['success'] = true; // We successfully processed the notification
+            $response['message'] = 'Payment failure notification processed';
+            break;
+            
+        case 'PAY_CANCEL':
+        case 'CANCEL':
+            // Payment cancelled
+            // TODO: Update your database - mark order as cancelled
+            // TODO: Mark notification as processed
+            
+            error_log("Payment cancelled - payment_order_id: {$paymentOrderId}, merch_order_id: {$merchOrderId}");
+            
+            $response['success'] = true;
+            $response['message'] = 'Payment cancellation notification processed';
+            break;
+            
+        default:
+            // Unknown status
+            error_log("Unknown payment status - payment_order_id: {$paymentOrderId}, trade_status: {$tradeStatus}");
+            
+            $response['success'] = true; // Still acknowledge receipt
+            $response['message'] = 'Notification received with unknown status';
+            break;
+    }
+    
+} catch (\Exception $e) {
+    error_log('Error processing Telebirr notification: ' . $e->getMessage());
+    
+    $response['success'] = false;
+    $response['message'] = 'Error processing notification: ' . $e->getMessage();
+    
+    // Return 500 status code on error
+    http_response_code(500);
+}
+
+// Return JSON response (Telebirr expects a response)
+echo json_encode($response);
 ```
 
-If you need to **decrypt legacy payments** from the older API using RSA public key, you can still use the existing `Melaku\Telebirr\Notify` class as before:
+### Notification Parameters
 
+Telebirr sends the following parameters in the notification (per Notify_Callback spec):
+
+- `trade_status`: Payment status (`PAY_SUCCESS`, `PAY_FAILED`, `PAY_CANCEL`)
+- `payment_order_id`: Telebirr's payment order ID
+- `merch_order_id`: Your merchant order ID (from `createOrder`)
+- `total_amount`: Payment amount
+- `trans_currency`: Currency (typically `ETB`)
+- `trans_end_time`: Transaction completion timestamp
+- `notify_time`: Notification timestamp
+- `appid`: Merchant application ID
+- `merch_code`: Merchant code
+- `sign`: Signature for verification (if provided)
+- `sign_type`: Signature type (if provided)
+
+### Best Practices
+
+1. **Idempotency**: Always check if a notification has already been processed before processing it again
+2. **Signature Verification**: Verify the signature if Telebirr provides it to ensure the notification is authentic
+3. **Logging**: Log all notifications for audit and debugging purposes
+4. **Error Handling**: Return appropriate HTTP status codes (200 for success, 500 for errors)
+5. **Response Format**: Always return a JSON response, even on errors
+6. **Database Updates**: Update your database based on notification status
+7. **HTTPS**: Use HTTPS for your notification endpoint
+8. **Timeout Handling**: Process notifications quickly and return response promptly
+
+### When Do You Need the `Notify` Class?
+
+**For H5 C2B Web Payment Integration (this library):**
+- ❌ **You DON'T need the `Notify` class**
+- ✅ Telebirr sends plain JSON - just parse it with `json_decode()`
+- ✅ See the example above in "Notification Endpoint Implementation"
+
+**For Legacy API (old Telebirr integration):**
+- ✅ **You DO need the `Notify` class**
+- ✅ Telebirr sends encrypted data - you must decrypt it first
+- ✅ Use the `Notify` class to decrypt, then parse JSON
+
+**Example for Legacy API:**
 ```php
+// ONLY for legacy API - NOT for H5 C2B!
 use Melaku\Telebirr\Notify;
 
-$publicKey = 'YOUR PUBLIC KEY (base64, without PEM headers)';
-$data      = file_get_contents('php://input'); // raw encrypted data from Telebirr
+// Telebirr sends encrypted data (base64-encoded)
+$encryptedData = file_get_contents('php://input');
 
-$notify = new Notify($publicKey, $data);
-$json   = $notify->getPaymentInfo(); // decrypted JSON string
+// Decrypt using your public key
+$publicKey = 'YOUR PUBLIC KEY (base64, without PEM headers)';
+$notify = new Notify($publicKey, $encryptedData);
+$json = $notify->getPaymentInfo(); // Decrypt to get JSON string
+
+// Now parse the decrypted JSON
+$notification = json_decode($json, true);
+
+// Process notification...
 ```
+
+**Summary:**
+- **H5 C2B (current)**: `$notification = json_decode(file_get_contents('php://input'), true);` ✅
+- **Legacy (old)**: Use `Notify` class to decrypt first, then parse JSON ✅
 
 ## Complete Usage Guide
 
