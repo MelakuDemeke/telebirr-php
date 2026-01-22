@@ -92,18 +92,52 @@ class Telebirr
 	}
 
 	/**
-	 * Step 2: Create order and return full Telebirr response.
+	 * Step 2: Request create order (preOrder) – Telebirr H5 C2B requestCreateOrder.
 	 *
-	 * @param string $fabricToken "Bearer xxx"
-	 * @param string $title       Order title
-	 * @param string|int|float $amount  Total amount
+	 * Per Telebirr H5 C2B Web Payment Integration Quick Guide (requestCreateOrder):
+	 * @see https://developer.ethiotelecom.et/docs/H5%20C2B%20Web%20Payment%20Integration%20Quick%20Guide/requestCreateOrder
 	 *
-	 * @return array Full API response (should contain biz_content.prepay_id on success)
-	 * @throws \RuntimeException on API errors or invalid responses
+	 * API Specification:
+	 * - Endpoint: POST {baseUrl}/payment/v1/merchant/preOrder
+	 * - Headers:
+	 *   - Content-Type: application/json
+	 *   - X-APP-Key: {fabricAppId}
+	 *   - Authorization: {fabricToken} (from applyFabricToken)
+	 * - Request Body:
+	 *   {
+	 *     "timestamp": "{timestamp}",
+	 *     "nonce_str": "{nonce_str}",
+	 *     "method": "payment.preorder",
+	 *     "version": "1.0",
+	 *     "biz_content": {
+	 *       "notify_url": "{notify_url}",
+	 *       "appid": "{merchantAppId}",
+	 *       "merch_code": "{merchantCode}",
+	 *       "merch_order_id": "{merch_order_id}",
+	 *       "trade_type": "Checkout",
+	 *       "title": "{title}",
+	 *       "total_amount": "{amount}", // String with 2 decimal places
+	 *       "trans_currency": "ETB",
+	 *       "timeout_express": "120m",
+	 *       "redirect_url": "{redirect_url}" // Optional
+	 *     },
+	 *     "sign": "{signature}",
+	 *     "sign_type": "SHA256WithRSA"
+	 *   }
+	 * - Success Response: { "biz_content": { "prepay_id": "...", ... }, ... }
+	 * - Error Response: { "code": "...", "message": "...", ... }
+	 *
+	 * @param string      $fabricToken  "Bearer xxx" from applyFabricToken()
+	 * @param string      $title        Order title
+	 * @param string|int|float $amount  Total amount (ETB) - will be formatted to 2 decimals
+	 * @param string|null $merchOrderId Optional merchant order ID; if null, one is auto-generated
+	 *
+	 * @return array Full API response (contains biz_content.prepay_id on success)
+	 * @throws \RuntimeException on API errors, invalid responses, or missing prepay_id
 	 */
-	public function createOrder(string $fabricToken, string $title, $amount): array
+	public function createOrder(string $fabricToken, string $title, $amount, ?string $merchOrderId = null): array
 	{
-		$reqObject = $this->buildPreOrderRequest($title, $amount);
+		$reqObject = $this->buildPreOrderRequest($title, $amount, $merchOrderId);
 
 		$url = $this->config->baseUrl . '/payment/v1/merchant/preOrder';
 
@@ -152,6 +186,17 @@ class Telebirr
 			);
 		}
 
+		// Validate prepay_id in response (per requestCreateOrder spec)
+		if (
+			!isset($result['biz_content']) ||
+			!is_array($result['biz_content']) ||
+			empty($result['biz_content']['prepay_id'])
+		) {
+			throw new \RuntimeException(
+				'prepay_id missing in create order response. Response: ' . json_encode($result)
+			);
+		}
+
 		return $result;
 	}
 
@@ -166,9 +211,15 @@ class Telebirr
 	}
 
 	/**
-	 * High-level helper: do all steps and return final checkout URL.
+	 * High-level helper: applyFabricToken + createOrder + buildCheckoutUrl.
+	 *
+	 * @param string      $title        Order title
+	 * @param string|int|float $amount  Total amount (ETB)
+	 * @param string|null $merchOrderId Optional merchant order ID; if null, one is generated
+	 *
+	 * @return string Checkout URL to redirect the user to
 	 */
-	public function createCheckoutUrl(string $title, $amount): string
+	public function createCheckoutUrl(string $title, $amount, ?string $merchOrderId = null): string
 	{
 		$tokenInfo   = $this->applyFabricToken();
 		$fabricToken = $tokenInfo['token'] ?? null;
@@ -176,27 +227,25 @@ class Telebirr
 			throw new \RuntimeException('Fabric token missing in token response: ' . json_encode($tokenInfo));
 		}
 
-		$order = $this->createOrder($fabricToken, $title, $amount);
-
-		if (
-			!isset($order['biz_content']) ||
-			!is_array($order['biz_content']) ||
-			!isset($order['biz_content']['prepay_id'])
-		) {
-			throw new \RuntimeException(
-				'prepay_id missing in create order response: ' . json_encode($order)
-			);
-		}
+		$order = $this->createOrder($fabricToken, $title, $amount, $merchOrderId);
 
 		return $this->buildCheckoutUrl($order['biz_content']['prepay_id']);
 	}
 
 	/**
-	 * Internal: build preOrder request body exactly as Telebirr expects.
+	 * Internal: build preOrder request body per requestCreateOrder spec.
+	 *
+	 * Builds the complete request object according to Telebirr H5 C2B Web Payment Integration
+	 * Quick Guide (requestCreateOrder). All fields are properly formatted and signed.
+	 *
+	 * @param string      $title        Order title
+	 * @param string|int|float $amount  Total amount (will be formatted to string with 2 decimals)
+	 * @param string|null $merchOrderId Optional merchant order ID; if null, auto-generated
+	 * @return array Complete signed request object ready for JSON encoding
 	 */
-	private function buildPreOrderRequest(string $title, $amount): array
+	private function buildPreOrderRequest(string $title, $amount, ?string $merchOrderId = null): array
 	{
-		// API expects total_amount as string
+		// API expects total_amount as string with 2 decimals
 		$amountStr = is_numeric($amount)
 			? number_format((float) $amount, 2, '.', '')
 			: (string) $amount;
@@ -212,7 +261,7 @@ class Telebirr
 			'notify_url'      => $this->config->notifyUrl,
 			'appid'           => $this->config->merchantAppId,
 			'merch_code'      => $this->config->merchantCode,
-			'merch_order_id'  => $this->createMerchantOrderId(),
+			'merch_order_id'  => $merchOrderId !== null && $merchOrderId !== '' ? $merchOrderId : $this->createMerchantOrderId(),
 			'trade_type'      => 'Checkout',
 			'title'           => $title,
 			'total_amount'    => $amountStr,

@@ -19,7 +19,7 @@
 
 Telebirr-Php is a PHP library for [telebirr](https://www.ethiotelecom.et/telebirr/).  
 Telebirr is a mobile money service developed by Huawei that is owned and was launched by Ethio telecom.  
-This library focuses on the **Web Checkout (C2B)** flow and provides a modern, easy-to-use API, mirroring the official demo implementation.
+This library focuses on the **Web Checkout (C2B)** flow and provides a modern, easy-to-use API, fully compliant with the [Telebirr H5 C2B Web Payment Integration Quick Guide](https://developer.ethiotelecom.et/docs/H5%20C2B%20Web%20Payment%20Integration%20Quick%20Guide/requestCreateOrder).
 
 ## Table of content
 
@@ -100,6 +100,8 @@ $amount = '100.00';
 
 // High-level helper: does token + preOrder + checkout URL
 $checkoutUrl = $client->createCheckoutUrl($title, $amount);
+// Optional: pass your own merchant order ID
+// $checkoutUrl = $client->createCheckoutUrl($title, $amount, 'MY-ORDER-123');
 
 // Redirect customer to Telebirr checkout
 header('Location: ' . $checkoutUrl);
@@ -107,6 +109,8 @@ exit;
 ```
 
 ## Advanced usage (manual steps)
+
+This approach gives you more control over each step of the payment flow:
 
 ```php
 require 'vendor/autoload.php';
@@ -121,18 +125,32 @@ $client = new Telebirr($config);
 $tokenInfo   = $client->applyFabricToken();
 $fabricToken = $tokenInfo['token']; // "Bearer xxx"
 
-// 2) Create order
+// 2) Create order (requestCreateOrder API endpoint)
+// This calls POST /payment/v1/merchant/preOrder per H5 C2B Web Payment Integration spec
+// See: https://developer.ethiotelecom.et/docs/H5%20C2B%20Web%20Payment%20Integration%20Quick%20Guide/requestCreateOrder
 $order = $client->createOrder($fabricToken, $title, $amount);
+// Optional: pass your own merchant order ID
+// $order = $client->createOrder($fabricToken, $title, $amount, 'MY-ORDER-123');
 
-// 3) Build checkout URL
-if (!isset($order['biz_content']['prepay_id'])) {
-    throw new \RuntimeException('prepay_id missing: ' . json_encode($order));
-}
+// The createOrder() method validates:
+// - HTTP status code (200-299)
+// - API error responses (code/message)
+// - Presence of prepay_id in biz_content
 
+// 3) Build checkout URL from prepay_id
 $checkoutUrl = $client->buildCheckoutUrl($order['biz_content']['prepay_id']);
 header('Location: ' . $checkoutUrl);
 exit;
 ```
+
+### requestCreateOrder API Details
+
+The `createOrder()` method implements the **requestCreateOrder** endpoint from the Telebirr H5 C2B Web Payment Integration Quick Guide:
+
+- **Endpoint**: `POST {baseUrl}/payment/v1/merchant/preOrder`
+- **Request includes**: All required fields (`notify_url`, `appid`, `merch_code`, `merch_order_id`, `trade_type`, `title`, `total_amount`, `trans_currency`, `timeout_express`) plus optional `redirect_url`
+- **Response validation**: Automatically validates `biz_content.prepay_id` is present
+- **Error handling**: Comprehensive validation of HTTP status codes and API error responses
 
 ## Webhook / Notification handling
 
