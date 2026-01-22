@@ -172,6 +172,11 @@ class Telebirr
 			'trans_currency' => 'ETB',
 			'timeout_express' => '120m',
 		];
+		
+		// Add redirect_url if configured (optional - for user redirect after payment)
+		if ($this->config->redirectUrl !== null) {
+			$biz['redirect_url'] = $this->config->redirectUrl;
+		}
 
 		$req['biz_content'] = $biz;
 

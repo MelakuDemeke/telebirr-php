@@ -61,6 +61,7 @@ $config = new Config([
     'merchantCode'  => getenv('TELEBIRR_MERCHANT_CODE'),
     'privateKey'    => getenv('TELEBIRR_PRIVATE_KEY_PEM'),
     'notifyUrl'     => 'https://your-domain.com/telebirr/notify', // Required: server-to-server callback URL
+    'redirectUrl'   => 'https://your-domain.com/telebirr/return', // Optional: user redirect after payment
 ]);
 ```
 
@@ -69,6 +70,8 @@ $config = new Config([
 - Handle server-to-server notifications (not user-facing)
 - Update your database and mark orders as paid/failed
 - Return appropriate JSON responses
+
+**Optional:** `redirectUrl` is where Telebirr redirects users after payment completion (success or failure). This is added to `biz_content` as `redirect_url` in the preOrder request. This is a user-facing page that displays payment results. If not provided, Telebirr may use a default redirect behavior.
 
 ## Basic usage (recommended)
 

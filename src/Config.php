@@ -12,6 +12,7 @@ class Config
     public string $merchantCode;
     public string $privateKey;
     public string $notifyUrl;
+    public ?string $redirectUrl;
 
     public function __construct(array $options)
     {
@@ -22,10 +23,13 @@ class Config
         $this->merchantAppId = $options['merchantAppId'];
         $this->merchantCode  = $options['merchantCode'];
         $this->privateKey    = $options['privateKey'];
-        
+
         if (empty($options['notifyUrl'])) {
             throw new \InvalidArgumentException('notifyUrl is required. This is where Telebirr will send payment status updates.');
         }
         $this->notifyUrl = $options['notifyUrl'];
+
+        // redirectUrl is optional - where Telebirr redirects user after payment
+        $this->redirectUrl = $options['redirectUrl'] ?? null;
     }
 }
