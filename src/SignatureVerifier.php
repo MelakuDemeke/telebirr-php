@@ -39,7 +39,7 @@ class SignatureVerifier
     {
         // Get public key from Config or use provided string
         $telebirrPublicKey = self::getPublicKey($configOrPublicKey);
-        
+
         if (!$telebirrPublicKey) {
             throw new \RuntimeException('No public key available for verification. Provide telebirrPublicKey in config or pass it directly.');
         }
@@ -66,13 +66,13 @@ class SignatureVerifier
         if (self::verifySignature($canonicalString, $normalizedSignature, $telebirrPublicKey)) {
             return true;
         }
-        
+
         // If that fails, try with URL-decoded signature (base64 + becomes space in URLs)
         $urlDecodedSignature = urldecode($signature);
         if ($urlDecodedSignature !== $normalizedSignature && self::verifySignature($canonicalString, $urlDecodedSignature, $telebirrPublicKey)) {
             return true;
         }
-        
+
         // Also try using raw query string if available (as fallback)
         if (isset($_SERVER['QUERY_STRING']) && !empty($_SERVER['QUERY_STRING'])) {
             if (self::verifyFromRawQueryString($_SERVER['QUERY_STRING'], $telebirrPublicKey)) {
@@ -96,7 +96,7 @@ class SignatureVerifier
             if (!empty($configOrPublicKey->telebirrPublicKey)) {
                 return $configOrPublicKey->telebirrPublicKey;
             }
-            
+
             // Fall back to extracting from private key
             if (!empty($configOrPublicKey->privateKey)) {
                 try {
@@ -105,10 +105,10 @@ class SignatureVerifier
                     // Ignore and return null
                 }
             }
-            
+
             return null;
         }
-        
+
         // Assume it's a public key string
         return is_string($configOrPublicKey) ? $configOrPublicKey : null;
     }
@@ -182,7 +182,7 @@ class SignatureVerifier
         if (strpos($signature, ' ') !== false && strpos($signature, '+') === false) {
             $signature = str_replace(' ', '+', $signature);
         }
-        
+
         return $signature;
     }
 
@@ -205,16 +205,16 @@ class SignatureVerifier
             // 4. URL decode only
             ['name' => 'url-decode', 'value' => urldecode($signature)],
         ];
-        
+
         foreach ($attempts as $attempt) {
             $attemptValue = $attempt['value'];
-            
+
             // Try to decode
             $decoded = base64_decode($attemptValue, true);
             if ($decoded !== false && strlen($decoded) > 0) {
                 return ['decoded' => $decoded, 'attempt' => $attempt['name']];
             }
-            
+
             // If padding might be missing, try adding it
             $paddingNeeded = 4 - (strlen($attemptValue) % 4);
             if ($paddingNeeded !== 4) {
@@ -225,7 +225,7 @@ class SignatureVerifier
                 }
             }
         }
-        
+
         return false;
     }
 
@@ -252,7 +252,7 @@ class SignatureVerifier
 
         // Decode signature using multiple strategies
         $decodeResult = self::decodeSignature($signature);
-        
+
         if ($decodeResult === false) {
             // Enhanced error logging with context
             $errorDetails = [
@@ -266,10 +266,10 @@ class SignatureVerifier
             @unlink($tempDataFile);
             return false;
         }
-        
+
         $signatureBinary = $decodeResult['decoded'];
         $successfulAttempt = $decodeResult['attempt'];
-        
+
         $tempSigFile = tempnam(sys_get_temp_dir(), 'tb_sig_');
         file_put_contents($tempSigFile, $signatureBinary);
 
@@ -304,7 +304,6 @@ class SignatureVerifier
 
             // OpenSSL returns 0 on success, non-zero on failure
             return $returnVar === 0;
-
         } finally {
             // Clean up temporary files
             @unlink($tempKeyFile);
@@ -326,21 +325,21 @@ class SignatureVerifier
     public static function verifyFromRawQueryString(string $rawQueryString, $configOrPublicKey): bool
     {
         $telebirrPublicKey = self::getPublicKey($configOrPublicKey);
-        
+
         if (!$telebirrPublicKey) {
             return false;
         }
-        
+
         // Parse the raw query string
         parse_str($rawQueryString, $params);
-        
+
         if (empty($params['sign']) || empty($params['sign_type'])) {
             return false;
         }
-        
+
         // Build canonical string from parsed params
         $canonicalString = self::buildCanonicalString($params);
-        
+
         // Verify signature
         return self::verifySignature($canonicalString, $params['sign'], $telebirrPublicKey);
     }
@@ -369,17 +368,17 @@ class SignatureVerifier
     public static function extractPublicKeyFromPrivateKey(string $privateKey): string
     {
         $privateKeyResource = openssl_pkey_get_private($privateKey);
-        
+
         if (!$privateKeyResource) {
             throw new \RuntimeException('Invalid private key format');
         }
-        
+
         $publicKeyDetails = openssl_pkey_get_details($privateKeyResource);
-        
+
         if (!$publicKeyDetails || !isset($publicKeyDetails['key'])) {
             throw new \RuntimeException('Failed to extract public key from private key');
         }
-        
+
         return $publicKeyDetails['key'];
     }
 }
