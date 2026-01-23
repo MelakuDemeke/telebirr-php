@@ -28,11 +28,34 @@ This library focuses on the **Web Checkout (C2B)** flow and provides a modern, e
   - [Installation](#installation)
     - [Composer](#composer)
   - [Configuration](#configuration)
+    - [Environment-Based Configuration (Recommended)](#environment-based-configuration-recommended)
+    - [Environment URLs](#environment-urls)
+    - [Checking Current Environment](#checking-current-environment)
   - [Basic usage (recommended)](#basic-usage-recommended)
   - [Advanced usage (manual steps)](#advanced-usage-manual-steps)
-  - [Webhook / Notification handling](#webhook--notification-handling)
+    - [requestCreateOrder API Details](#requestcreateorder-api-details)
+    - [Generate\_Check\_Url API Details](#generate_check_url-api-details)
+    - [CheckOut Process Details](#checkout-process-details)
+    - [queryOrder API Details](#queryorder-api-details)
+    - [RefundOrder API Details](#refundorder-api-details)
+  - [Webhook / Notification handling (Notify\_Callback)](#webhook--notification-handling-notify_callback)
+    - [Quick Answer: What Does the Notify Class Do?](#quick-answer-what-does-the-notify-class-do)
+    - [How Server-to-Server Notifications Work](#how-server-to-server-notifications-work)
+    - [Two Types of Notifications](#two-types-of-notifications)
+      - [1. H5 C2B Web Payment (Current/New) - JSON Format ✅](#1-h5-c2b-web-payment-currentnew---json-format-)
+      - [2. Legacy API - Encrypted Format (Old) ⚠️](#2-legacy-api---encrypted-format-old-️)
+    - [Notify\_Callback Overview](#notify_callback-overview)
+    - [Notification Endpoint Implementation](#notification-endpoint-implementation)
+    - [Notification Parameters](#notification-parameters)
+    - [Best Practices](#best-practices)
+    - [When Do You Need the `Notify` Class?](#when-do-you-need-the-notify-class)
+  - [Complete Usage Guide](#complete-usage-guide)
   - [Request Signature Process](#request-signature-process)
-  - [Security & Requirements](#security--requirements)
+    - [Signature Generation Steps](#signature-generation-steps)
+    - [Excluded Fields](#excluded-fields)
+    - [Important Notes](#important-notes)
+    - [Example Signature Process](#example-signature-process)
+  - [Security \& Requirements](#security--requirements)
 
 ## Installation
 ### Composer
@@ -519,13 +542,13 @@ Here's how it works:
 
 ### Two Types of Notifications
 
-| Feature | H5 C2B (Current/New) ✅ | Legacy API (Old) |
-|---------|------------------------|------------------|
-| **Format** | Plain JSON | RSA-encrypted (base64) |
-| **Decryption needed?** | ❌ No | ✅ Yes |
-| **Notify class needed?** | ❌ No | ✅ Yes |
-| **Code example** | `json_decode(file_get_contents('php://input'), true)` | `new Notify($key, $data)->getPaymentInfo()` |
-| **This library uses** | ✅ H5 C2B | ❌ Legacy |
+| Feature                  | H5 C2B (Current/New) ✅                                | Legacy API (Old)                            |
+| ------------------------ | ----------------------------------------------------- | ------------------------------------------- |
+| **Format**               | Plain JSON                                            | RSA-encrypted (base64)                      |
+| **Decryption needed?**   | ❌ No                                                  | ✅ Yes                                       |
+| **Notify class needed?** | ❌ No                                                  | ✅ Yes                                       |
+| **Code example**         | `json_decode(file_get_contents('php://input'), true)` | `new Notify($key, $data)->getPaymentInfo()` |
+| **This library uses**    | ✅ H5 C2B                                              | ❌ Legacy                                    |
 
 #### 1. H5 C2B Web Payment (Current/New) - JSON Format ✅
 
@@ -889,6 +912,169 @@ $request = [
 ```
 
 The `Signer` class handles all of this automatically - you don't need to manually calculate signatures.
+
+## Signature Verification
+
+The library includes a `SignatureVerifier` class to verify signatures from Telebirr's return URLs and notifications. This is **critical for security** - always verify signatures before processing payments.
+
+### Why Verify Signatures?
+
+Signature verification ensures:
+- **Authenticity**: The data came from Telebirr (not a fake/imposter)
+- **Integrity**: The data hasn't been tampered with or modified
+
+### Configuration
+
+Add Telebirr's public key to your config:
+
+```php
+use Melaku\Telebirr\Config;
+
+$config = Config::forTest([
+    'fabricAppId'   => 'your-fabric-app-id',
+    'appSecret'     => 'your-app-secret',
+    'merchantAppId'  => 'your-merchant-app-id',
+    'merchantCode'  => 'your-merchant-code',
+    'privateKey'    => 'your-private-key-pem',
+    'notifyUrl'     => 'https://your-domain.com/notify',
+    'redirectUrl'   => 'https://your-domain.com/return',
+    
+    // Add Telebirr's public key for signature verification
+    'telebirrPublicKey' => <<<KEY
+-----BEGIN PUBLIC KEY-----
+YOUR_TELEBIRR_PUBLIC_KEY_HERE
+-----END PUBLIC KEY-----
+KEY,
+]);
+```
+
+**Note**: If Telebirr signs with YOUR private key, the library will automatically extract your public key from your private key. You don't need to provide `telebirrPublicKey` in that case.
+
+### Verifying Return URL Signatures
+
+When Telebirr redirects users to your `redirectUrl`, verify the signature:
+
+```php
+use Melaku\Telebirr\SignatureVerifier;
+use Melaku\Telebirr\Config;
+
+// Load your config
+$config = require 'config.php';
+$config = new Config($config);
+
+// Get parameters from return URL
+$params = $_GET;
+
+// Verify signature
+try {
+    $isValid = SignatureVerifier::verify($params, $config);
+    
+    if ($isValid) {
+        // ✅ Signature verified - process payment
+        $paymentOrderId = $params['payment_order_id'] ?? '';
+        $tradeStatus = $params['trade_status'] ?? '';
+        $totalAmount = $params['total_amount'] ?? '';
+        
+        if ($tradeStatus === 'PAY_SUCCESS') {
+            // Payment successful - update your database
+            echo "Payment verified and successful!";
+        }
+    } else {
+        // ❌ Signature verification failed - DO NOT TRUST THIS DATA
+        http_response_code(400);
+        echo "Invalid signature - payment data may be tampered";
+    }
+} catch (\Exception $e) {
+    // Error during verification
+    error_log('Signature verification error: ' . $e->getMessage());
+    http_response_code(500);
+    echo "Verification error";
+}
+```
+
+### Verifying Notification Signatures
+
+For server-to-server notifications, verify signatures before processing:
+
+```php
+use Melaku\Telebirr\SignatureVerifier;
+use Melaku\Telebirr\Config;
+
+// Load your config
+$config = require 'config.php';
+$config = new Config($config);
+
+// Get notification data (may be JSON or URL parameters)
+$notificationData = json_decode(file_get_contents('php://input'), true);
+
+// If notification includes signature parameters, verify them
+if (isset($notificationData['sign']) && isset($notificationData['sign_type'])) {
+    $isValid = SignatureVerifier::verify($notificationData, $config);
+    
+    if (!$isValid) {
+        // ❌ Signature verification failed
+        http_response_code(400);
+        echo json_encode(['error' => 'Invalid signature']);
+        exit;
+    }
+}
+
+// ✅ Signature verified - process notification
+// ... your notification processing code ...
+```
+
+### Using Public Key Directly
+
+You can also pass the public key directly instead of using Config:
+
+```php
+use Melaku\Telebirr\SignatureVerifier;
+
+$publicKey = <<<KEY
+-----BEGIN PUBLIC KEY-----
+YOUR_TELEBIRR_PUBLIC_KEY_HERE
+-----END PUBLIC KEY-----
+KEY;
+
+$params = $_GET;
+$isValid = SignatureVerifier::verify($params, $publicKey);
+```
+
+### Extracting Your Public Key
+
+If Telebirr signs with your private key, extract your public key:
+
+```php
+use Melaku\Telebirr\SignatureVerifier;
+
+$privateKey = 'your-private-key-pem';
+$publicKey = SignatureVerifier::extractPublicKeyFromPrivateKey($privateKey);
+
+// Use this public key for verification
+$isValid = SignatureVerifier::verify($params, $publicKey);
+```
+
+### Getting Canonical String (Debugging)
+
+To see what string was signed (for debugging):
+
+```php
+use Melaku\Telebirr\SignatureVerifier;
+
+$params = $_GET;
+$canonicalString = SignatureVerifier::getCanonicalString($params);
+echo "Canonical string: " . $canonicalString;
+```
+
+### Important Security Notes
+
+⚠️ **ALWAYS verify signatures before processing payments!**
+
+- Never trust payment data without signature verification
+- If verification fails, reject the payment and log the incident
+- Contact Telebirr support if verification consistently fails
+- Use server-to-server notifications (`notifyUrl`) for reliable payment processing
+- Return URLs (`redirectUrl`) are user-facing and less secure
 
 ## Security & Requirements
 

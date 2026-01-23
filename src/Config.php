@@ -13,6 +13,7 @@ class Config
     public string $privateKey;
     public string $notifyUrl;
     public ?string $redirectUrl;
+    public ?string $telebirrPublicKey;
 
     // Telebirr URLs
     private const BASE_URL_TEST = 'https://developerportal.ethiotelebirr.et:38443/apiaccess/payment/gateway';
@@ -44,6 +45,9 @@ class Config
 
         // redirectUrl is optional - where Telebirr redirects user after payment
         $this->redirectUrl = $options['redirectUrl'] ?? null;
+        
+        // telebirrPublicKey is optional - used for verifying signatures from return URLs and notifications
+        $this->telebirrPublicKey = $options['telebirrPublicKey'] ?? null;
     }
 
     /**
