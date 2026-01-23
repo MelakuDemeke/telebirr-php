@@ -51,17 +51,25 @@ class SignatureVerifier
             return false;
         }
 
+        // Check for signature truncation (common issue with long URLs)
+        if (self::detectTruncation($signature)) {
+            error_log('SignatureVerifier: Signature appears truncated. Length: ' . strlen($signature) . ', Expected ~512 characters. The URL might be too long.');
+        }
+
+        // Normalize signature (handle URL encoding issues)
+        $normalizedSignature = self::normalizeSignature($signature);
+
         // Build canonical string (same process as signing)
         $canonicalString = self::buildCanonicalString($params);
 
-        // Try verification with the signature as-is first
-        if (self::verifySignature($canonicalString, $signature, $telebirrPublicKey)) {
+        // Try verification with the normalized signature first
+        if (self::verifySignature($canonicalString, $normalizedSignature, $telebirrPublicKey)) {
             return true;
         }
         
         // If that fails, try with URL-decoded signature (base64 + becomes space in URLs)
         $urlDecodedSignature = urldecode($signature);
-        if ($urlDecodedSignature !== $signature && self::verifySignature($canonicalString, $urlDecodedSignature, $telebirrPublicKey)) {
+        if ($urlDecodedSignature !== $normalizedSignature && self::verifySignature($canonicalString, $urlDecodedSignature, $telebirrPublicKey)) {
             return true;
         }
         
@@ -138,39 +146,82 @@ class SignatureVerifier
     }
 
     /**
+     * Detect if signature appears to be truncated
+     * 
+     * Telebirr signatures are typically ~512 characters when base64-encoded.
+     * Signatures shorter than 400 characters are likely truncated, which can
+     * happen when URLs are too long and get cut off.
+     * 
+     * @param string $signature The signature string to check
+     * @return bool True if signature appears truncated, false otherwise
+     */
+    public static function detectTruncation(string $signature): bool
+    {
+        // Typical base64-encoded RSA signatures are ~512 characters
+        // Signatures shorter than 400 characters are suspicious
+        return strlen($signature) < 400;
+    }
+
+    /**
+     * Normalize signature string for verification
+     * 
+     * Handles common URL encoding issues:
+     * - Converts spaces to + (base64 uses + not spaces)
+     * - Handles URL encoding edge cases
+     * 
+     * This is a public method that can be used for pre-processing signatures
+     * before verification, or for diagnostic purposes.
+     * 
+     * @param string $signature The signature string (may be URL-encoded)
+     * @return string Normalized signature string
+     */
+    public static function normalizeSignature(string $signature): string
+    {
+        // If signature contains spaces but no +, spaces should be + (base64 uses + not spaces)
+        // This happens when PHP converts + to spaces in GET parameters
+        if (strpos($signature, ' ') !== false && strpos($signature, '+') === false) {
+            $signature = str_replace(' ', '+', $signature);
+        }
+        
+        return $signature;
+    }
+
+    /**
      * Decode base64 signature, handling URL encoding issues
      * 
      * @param string $signature The signature string (may be URL-encoded)
-     * @return string|false Binary signature on success, false on failure
+     * @return array{decoded: string, attempt: string}|false Returns array with decoded binary and attempt name on success, false on failure
      */
     private static function decodeSignature(string $signature)
     {
         // Try different decoding approaches
         $attempts = [
             // 1. As-is (if already properly formatted)
-            $signature,
+            ['name' => 'as-is', 'value' => $signature],
             // 2. Replace spaces with + (common URL encoding issue)
-            str_replace(' ', '+', $signature),
+            ['name' => 'space-to-plus', 'value' => str_replace(' ', '+', $signature)],
             // 3. URL decode first, then fix spaces
-            str_replace(' ', '+', urldecode($signature)),
+            ['name' => 'url-decode-then-space-fix', 'value' => str_replace(' ', '+', urldecode($signature))],
             // 4. URL decode only
-            urldecode($signature),
+            ['name' => 'url-decode', 'value' => urldecode($signature)],
         ];
         
         foreach ($attempts as $attempt) {
+            $attemptValue = $attempt['value'];
+            
             // Try to decode
-            $decoded = base64_decode($attempt, true);
+            $decoded = base64_decode($attemptValue, true);
             if ($decoded !== false && strlen($decoded) > 0) {
-                return $decoded;
+                return ['decoded' => $decoded, 'attempt' => $attempt['name']];
             }
             
             // If padding might be missing, try adding it
-            $paddingNeeded = 4 - (strlen($attempt) % 4);
+            $paddingNeeded = 4 - (strlen($attemptValue) % 4);
             if ($paddingNeeded !== 4) {
-                $attemptWithPadding = $attempt . str_repeat('=', $paddingNeeded);
+                $attemptWithPadding = $attemptValue . str_repeat('=', $paddingNeeded);
                 $decoded = base64_decode($attemptWithPadding, true);
                 if ($decoded !== false && strlen($decoded) > 0) {
-                    return $decoded;
+                    return ['decoded' => $decoded, 'attempt' => $attempt['name'] . ' (with padding)'];
                 }
             }
         }
@@ -200,14 +251,24 @@ class SignatureVerifier
         file_put_contents($tempDataFile, $data);
 
         // Decode signature using multiple strategies
-        $signatureBinary = self::decodeSignature($signature);
+        $decodeResult = self::decodeSignature($signature);
         
-        if ($signatureBinary === false) {
-            error_log('SignatureVerifier: Failed to decode base64 signature. Signature length: ' . strlen($signature) . ', First 50 chars: ' . substr($signature, 0, 50));
+        if ($decodeResult === false) {
+            // Enhanced error logging with context
+            $errorDetails = [
+                'Signature length: ' . strlen($signature),
+                'First 50 chars: ' . substr($signature, 0, 50),
+                'Canonical string length: ' . strlen($data),
+                'Decoding attempts: All failed (as-is, space-to-plus, url-decode-then-space-fix, url-decode)',
+            ];
+            error_log('SignatureVerifier: Failed to decode base64 signature. ' . implode(', ', $errorDetails));
             @unlink($tempKeyFile);
             @unlink($tempDataFile);
             return false;
         }
+        
+        $signatureBinary = $decodeResult['decoded'];
+        $successfulAttempt = $decodeResult['attempt'];
         
         $tempSigFile = tempnam(sys_get_temp_dir(), 'tb_sig_');
         file_put_contents($tempSigFile, $signatureBinary);
@@ -227,9 +288,18 @@ class SignatureVerifier
             $returnVar = 0;
             exec($command, $output, $returnVar);
 
-            // Log for debugging if verification fails
+            // Enhanced error logging with context if verification fails
             if ($returnVar !== 0) {
-                error_log('SignatureVerifier: OpenSSL verification failed. Return code: ' . $returnVar . ', Output: ' . implode("\n", $output));
+                $errorDetails = [
+                    'Return code: ' . $returnVar,
+                    'Signature length: ' . strlen($signature),
+                    'First 50 chars: ' . substr($signature, 0, 50),
+                    'Canonical string length: ' . strlen($data),
+                    'Successful decoding attempt: ' . $successfulAttempt,
+                    'Decoded signature size: ' . strlen($signatureBinary) . ' bytes',
+                    'OpenSSL output: ' . implode(' ', $output),
+                ];
+                error_log('SignatureVerifier: OpenSSL verification failed. ' . implode(', ', $errorDetails));
             }
 
             // OpenSSL returns 0 on success, non-zero on failure
