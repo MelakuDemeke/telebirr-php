@@ -55,6 +55,10 @@ This library focuses on the **Web Checkout (C2B)** flow and provides a modern, e
     - [Excluded Fields](#excluded-fields)
     - [Important Notes](#important-notes)
     - [Example Signature Process](#example-signature-process)
+  - [Helper Classes](#helper-classes)
+    - [PaymentStatus](#paymentstatus)
+    - [ReturnUrlHandler](#returnurlhandler)
+    - [NotificationHandler](#notificationhandler)
   - [Security \& Requirements](#security--requirements)
 
 ## Installation
@@ -652,125 +656,143 @@ Create a secure endpoint (e.g., `/telebirr/notify.php`) on your server. **Telebi
 - The user **never sees or interacts with this file**
 - It's **server-to-server communication**
 
+**Recommended: Using NotificationHandler (Easier)**
+
 ```php
 // notify.php - This file is on YOUR server
 // Telebirr's server will POST to this URL automatically
 
 require 'vendor/autoload.php';
 
-// Set JSON content type for response
+use Melaku\Telebirr\Config;
+use Melaku\Telebirr\NotificationHandler;
+
+// Load config
+$configArray = require 'config.php';
+$config = new Config($configArray);
+
+try {
+    // Get raw POST data
+    $rawData = file_get_contents('php://input');
+    
+    // Log notification for audit
+    error_log('Telebirr Notification Received: ' . $rawData);
+    
+    // Parse notification using NotificationHandler
+    $notification = NotificationHandler::parse($rawData);
+    
+    // Extract payment information
+    $paymentInfo = NotificationHandler::extractPaymentInfo($notification);
+    
+    // Verify signature (CRITICAL for security)
+    if (!NotificationHandler::verify($notification, $config)) {
+        error_log('Notification signature verification failed');
+        NotificationHandler::respondError('Invalid signature');
+        exit;
+    }
+    
+    // TODO: Implement idempotency check (CRITICAL)
+    // Check if you've already processed this notification using payment_order_id or merch_order_id
+    // This prevents processing the same payment multiple times
+    // if (isNotificationProcessed($paymentInfo['paymentOrderId'])) {
+    //     NotificationHandler::respondSuccess('Notification already processed');
+    //     exit;
+    // }
+    
+    // Process based on payment status
+    if (NotificationHandler::isPaymentSuccessful($notification)) {
+        // Payment successful
+        // TODO: Update your database - mark order as paid
+        // TODO: Fulfill the order (send email, update inventory, etc.)
+        // TODO: Mark notification as processed (for idempotency)
+        
+        error_log(sprintf(
+            'Payment successful - payment_order_id: %s, merch_order_id: %s, amount: %s',
+            $paymentInfo['paymentOrderId'],
+            $paymentInfo['merchantOrderId'],
+            $paymentInfo['amount']
+        ));
+        
+        NotificationHandler::respondSuccess('Payment notification processed successfully');
+    } else {
+        // Payment failed or cancelled
+        error_log(sprintf(
+            'Payment status: %s - payment_order_id: %s, merch_order_id: %s',
+            $paymentInfo['tradeStatus'],
+            $paymentInfo['paymentOrderId'],
+            $paymentInfo['merchantOrderId']
+        ));
+        
+        // TODO: Update your database - mark order as failed/cancelled
+        // TODO: Notify customer if needed
+        // TODO: Mark notification as processed
+        
+        NotificationHandler::respondSuccess('Payment status notification processed');
+    }
+    
+} catch (\InvalidArgumentException $e) {
+    // Invalid JSON format
+    error_log('Error parsing Telebirr notification: ' . $e->getMessage());
+    NotificationHandler::respondError('Invalid notification format: ' . $e->getMessage());
+} catch (\Exception $e) {
+    // Other errors
+    error_log('Error processing Telebirr notification: ' . $e->getMessage());
+    NotificationHandler::respondError('Error processing notification: ' . $e->getMessage());
+}
+```
+
+**Alternative: Manual Implementation**
+
+```php
+// notify.php - Manual implementation (for reference)
+
+require 'vendor/autoload.php';
+
 header('Content-Type: application/json');
 
-// Step 1: Get what Telebirr sent (it's already JSON for H5 C2B)
-$rawData = file_get_contents('php://input'); // Raw POST data from Telebirr
-
-// Step 2: Parse the JSON (NO decryption needed for H5 C2B!)
+// Get what Telebirr sent (it's already JSON for H5 C2B)
+$rawData = file_get_contents('php://input');
 $notification = json_decode($rawData, true);
 
-// Log notification for audit (important for debugging and compliance)
+// Log notification for audit
 error_log('Telebirr Notification Received: ' . $rawData);
 
 // Prepare response
-$response = [
-    'success' => false,
-    'message' => '',
-];
+$response = ['success' => false, 'message' => ''];
 
 try {
-    // Validate notification data
     if (empty($notification)) {
         throw new \RuntimeException('Invalid notification data');
     }
 
-    // Extract notification fields (per Notify_Callback spec)
+    // Extract notification fields
     $tradeStatus = $notification['trade_status'] ?? '';
     $paymentOrderId = $notification['payment_order_id'] ?? '';
     $merchOrderId = $notification['merch_order_id'] ?? '';
     $totalAmount = $notification['total_amount'] ?? '';
-    $transCurrency = $notification['trans_currency'] ?? '';
-    $transEndTime = $notification['trans_end_time'] ?? '';
-    $notifyTime = $notification['notify_time'] ?? '';
-    $appid = $notification['appid'] ?? '';
-    $merchCode = $notification['merch_code'] ?? '';
-    $sign = $notification['sign'] ?? '';
-    $signType = $notification['sign_type'] ?? '';
 
-    // TODO: Verify signature if Telebirr provides signature verification
-    // This is critical for security - verify that the notification actually came from Telebirr
-    // if (!verifySignature($notification, $sign, $signType)) {
-    //     throw new \RuntimeException('Invalid signature');
-    // }
-
-    // TODO: Implement idempotency check (CRITICAL)
-    // Check if you've already processed this notification using payment_order_id or merch_order_id
-    // This prevents processing the same payment multiple times
-    // if (isNotificationProcessed($paymentOrderId)) {
-    //     $response['success'] = true;
-    //     $response['message'] = 'Notification already processed';
-    //     echo json_encode($response);
-    //     exit;
-    // }
+    // TODO: Verify signature using SignatureVerifier
+    // TODO: Implement idempotency check
 
     // Process notification based on trade_status
-    switch (strtoupper($tradeStatus)) {
-        case 'PAY_SUCCESS':
-        case 'SUCCESS':
-            // Payment successful
-            // TODO: Update your database - mark order as paid
-            // TODO: Fulfill the order (send email, update inventory, etc.)
-            // TODO: Mark notification as processed (for idempotency)
-            
-            error_log("Payment successful - payment_order_id: {$paymentOrderId}, merch_order_id: {$merchOrderId}, amount: {$totalAmount}");
-            
-            $response['success'] = true;
-            $response['message'] = 'Payment notification processed successfully';
-            break;
-            
-        case 'PAY_FAILED':
-        case 'FAILED':
-            // Payment failed
-            // TODO: Update your database - mark order as failed
-            // TODO: Notify customer if needed
-            // TODO: Mark notification as processed
-            
-            error_log("Payment failed - payment_order_id: {$paymentOrderId}, merch_order_id: {$merchOrderId}");
-            
-            $response['success'] = true; // We successfully processed the notification
-            $response['message'] = 'Payment failure notification processed';
-            break;
-            
-        case 'PAY_CANCEL':
-        case 'CANCEL':
-            // Payment cancelled
-            // TODO: Update your database - mark order as cancelled
-            // TODO: Mark notification as processed
-            
-            error_log("Payment cancelled - payment_order_id: {$paymentOrderId}, merch_order_id: {$merchOrderId}");
-            
-            $response['success'] = true;
-            $response['message'] = 'Payment cancellation notification processed';
-            break;
-            
-        default:
-            // Unknown status
-            error_log("Unknown payment status - payment_order_id: {$paymentOrderId}, trade_status: {$tradeStatus}");
-            
-            $response['success'] = true; // Still acknowledge receipt
-            $response['message'] = 'Notification received with unknown status';
-            break;
+    if (strtoupper($tradeStatus) === 'PAY_SUCCESS' || strtoupper($tradeStatus) === 'SUCCESS') {
+        // Payment successful
+        // TODO: Update database, fulfill order, etc.
+        $response['success'] = true;
+        $response['message'] = 'Payment notification processed successfully';
+    } else {
+        // Payment failed or cancelled
+        $response['success'] = true;
+        $response['message'] = 'Payment status notification processed';
     }
     
 } catch (\Exception $e) {
     error_log('Error processing Telebirr notification: ' . $e->getMessage());
-    
     $response['success'] = false;
     $response['message'] = 'Error processing notification: ' . $e->getMessage();
-    
-    // Return 500 status code on error
     http_response_code(500);
 }
 
-// Return JSON response (Telebirr expects a response)
 echo json_encode($response);
 ```
 
@@ -954,6 +976,41 @@ KEY,
 
 When Telebirr redirects users to your `redirectUrl`, verify the signature:
 
+**Recommended: Using ReturnUrlHandler (Easier)**
+
+```php
+use Melaku\Telebirr\ReturnUrlHandler;
+use Melaku\Telebirr\Config;
+
+// Load your config
+$config = require 'config.php';
+$config = new Config($config);
+
+try {
+    // Handle return URL - automatically verifies signature and extracts data
+    $paymentData = ReturnUrlHandler::handle($_GET, $config);
+    
+    if ($paymentData['isSuccess']) {
+        // ✅ Payment successful - update your database
+        $paymentOrderId = $paymentData['paymentOrderId'];
+        $merchantOrderId = $paymentData['merchantOrderId'];
+        $amount = $paymentData['amount'];
+        
+        // Update database, fulfill order, etc.
+        echo "Payment verified and successful!";
+    } else {
+        // Payment failed or cancelled
+        echo "Payment status: " . $paymentData['tradeStatus'];
+    }
+} catch (\RuntimeException $e) {
+    // ❌ Signature verification failed - DO NOT TRUST THIS DATA
+    http_response_code(400);
+    echo "Invalid signature - payment data may be tampered";
+}
+```
+
+**Alternative: Manual Verification**
+
 ```php
 use Melaku\Telebirr\SignatureVerifier;
 use Melaku\Telebirr\Config;
@@ -995,6 +1052,53 @@ try {
 ### Verifying Notification Signatures
 
 For server-to-server notifications, verify signatures before processing:
+
+**Recommended: Using NotificationHandler (Easier)**
+
+```php
+use Melaku\Telebirr\NotificationHandler;
+use Melaku\Telebirr\Config;
+
+// Load your config
+$config = require 'config.php';
+$config = new Config($config);
+
+try {
+    // Parse notification from raw JSON
+    $rawData = file_get_contents('php://input');
+    $notification = NotificationHandler::parse($rawData);
+    
+    // Verify signature
+    if (!NotificationHandler::verify($notification, $config)) {
+        NotificationHandler::respondError('Invalid signature');
+        exit;
+    }
+    
+    // Extract payment information
+    $paymentInfo = NotificationHandler::extractPaymentInfo($notification);
+    
+    // Process based on payment status
+    if (NotificationHandler::isPaymentSuccessful($notification)) {
+        // ✅ Payment successful - update database, fulfill order, etc.
+        // TODO: Implement idempotency check
+        // TODO: Update database
+        // TODO: Fulfill order
+        
+        NotificationHandler::respondSuccess('Payment notification processed');
+    } else {
+        // Payment failed or cancelled
+        // TODO: Update database
+        
+        NotificationHandler::respondSuccess('Status notification processed');
+    }
+} catch (\InvalidArgumentException $e) {
+    NotificationHandler::respondError('Invalid notification format: ' . $e->getMessage());
+} catch (\Exception $e) {
+    NotificationHandler::respondError('Error processing notification: ' . $e->getMessage());
+}
+```
+
+**Alternative: Manual Verification**
 
 ```php
 use Melaku\Telebirr\SignatureVerifier;
@@ -1075,6 +1179,154 @@ echo "Canonical string: " . $canonicalString;
 - Contact Telebirr support if verification consistently fails
 - Use server-to-server notifications (`notifyUrl`) for reliable payment processing
 - Return URLs (`redirectUrl`) are user-facing and less secure
+
+## Helper Classes
+
+The library provides helper classes to simplify common tasks like handling return URLs and notifications. These classes handle signature verification, parsing, and provide convenient methods for checking payment status.
+
+### PaymentStatus
+
+The `PaymentStatus` class provides utility methods for checking payment status values.
+
+```php
+use Melaku\Telebirr\PaymentStatus;
+
+$tradeStatus = 'PAY_SUCCESS';
+
+// Check if payment was successful
+if (PaymentStatus::isSuccess($tradeStatus)) {
+    // Payment successful
+}
+
+// Check if payment failed
+if (PaymentStatus::isFailure($tradeStatus)) {
+    // Payment failed
+}
+
+// Check if payment was cancelled
+if (PaymentStatus::isCancelled($tradeStatus)) {
+    // Payment cancelled
+}
+```
+
+**Methods:**
+- `isSuccess(string $tradeStatus): bool` - Check if status indicates success (`PAY_SUCCESS`, `SUCCESS`, `PAID`)
+- `isFailure(string $tradeStatus): bool` - Check if status indicates failure (`PAY_FAILED`, `FAILED`)
+- `isCancelled(string $tradeStatus): bool` - Check if status indicates cancellation (`PAY_CANCEL`, `CANCEL`, `CANCELLED`)
+
+### ReturnUrlHandler
+
+The `ReturnUrlHandler` class simplifies handling Telebirr return URL parameters. It automatically verifies signatures, parses parameters, and extracts payment information.
+
+```php
+use Melaku\Telebirr\ReturnUrlHandler;
+use Melaku\Telebirr\Config;
+
+$config = new Config($configArray);
+
+try {
+    // Handle return URL - automatically verifies signature and extracts data
+    $paymentData = ReturnUrlHandler::handle($_GET, $config);
+    
+    // Access payment information
+    $tradeStatus = $paymentData['tradeStatus'];
+    $paymentOrderId = $paymentData['paymentOrderId'];
+    $merchantOrderId = $paymentData['merchantOrderId'];
+    $amount = $paymentData['amount'];
+    $currency = $paymentData['currency'];
+    $isSuccess = $paymentData['isSuccess'];
+    $timestamp = $paymentData['timestamp'];
+    $rawParams = $paymentData['raw']; // All original parameters
+    
+    if ($isSuccess) {
+        // Payment successful - update database, fulfill order, etc.
+    }
+} catch (\RuntimeException $e) {
+    // Signature verification failed
+    // DO NOT process payment - data may be tampered
+    error_log('Return URL signature verification failed: ' . $e->getMessage());
+}
+```
+
+**Methods:**
+- `handle(array $params, Config $config): array` - Parse and verify return URL parameters. Returns array with:
+  - `tradeStatus`: Payment status (e.g., 'PAY_SUCCESS')
+  - `paymentOrderId`: Telebirr's payment order ID
+  - `merchantOrderId`: Your merchant order ID
+  - `amount`: Payment amount
+  - `currency`: Currency code (typically 'ETB')
+  - `isSuccess`: Boolean indicating if payment was successful
+  - `timestamp`: Transaction end time
+  - `raw`: All original parameters
+- `isPaymentSuccessful(array $params): bool` - Check if payment was successful based on parameters
+
+**Throws:** `\RuntimeException` if signature verification fails
+
+### NotificationHandler
+
+The `NotificationHandler` class simplifies handling Telebirr server-to-server payment notifications. It parses JSON, verifies signatures, and provides response helpers.
+
+```php
+use Melaku\Telebirr\NotificationHandler;
+use Melaku\Telebirr\Config;
+
+$config = new Config($configArray);
+
+try {
+    // Parse notification from raw JSON
+    $rawData = file_get_contents('php://input');
+    $notification = NotificationHandler::parse($rawData);
+    
+    // Verify signature
+    if (!NotificationHandler::verify($notification, $config)) {
+        NotificationHandler::respondError('Invalid signature');
+        exit;
+    }
+    
+    // Extract payment information
+    $paymentInfo = NotificationHandler::extractPaymentInfo($notification);
+    
+    // Process based on payment status
+    if (NotificationHandler::isPaymentSuccessful($notification)) {
+        // Payment successful
+        // TODO: Update database, fulfill order, implement idempotency check
+        
+        NotificationHandler::respondSuccess('Payment notification processed');
+    } else {
+        // Payment failed or cancelled
+        // TODO: Update database
+        
+        NotificationHandler::respondSuccess('Status notification processed');
+    }
+} catch (\InvalidArgumentException $e) {
+    // Invalid JSON format
+    NotificationHandler::respondError('Invalid notification format: ' . $e->getMessage());
+} catch (\Exception $e) {
+    // Other errors
+    NotificationHandler::respondError('Error processing notification: ' . $e->getMessage());
+}
+```
+
+**Methods:**
+- `parse(string $rawJson): array` - Parse notification from raw JSON input. Throws `\InvalidArgumentException` if JSON is invalid.
+- `verify(array $notification, Config $config): bool` - Verify notification signature. Returns `false` if signature is missing or invalid.
+- `respondSuccess(?string $message = null): void` - Send success response to Telebirr (JSON format).
+- `respondError(string $message, int $httpCode = 500): void` - Send error response to Telebirr (JSON format with HTTP status code).
+- `isPaymentSuccessful(array $notification): bool` - Check if notification indicates successful payment.
+- `extractPaymentInfo(array $notification): array` - Extract payment information from notification. Returns array with:
+  - `tradeStatus`: Payment status
+  - `paymentOrderId`: Telebirr's payment order ID
+  - `merchantOrderId`: Your merchant order ID
+  - `amount`: Payment amount
+  - `currency`: Currency code
+  - `timestamp`: Transaction end time
+  - `notifyTime`: Notification timestamp
+
+**Best Practices:**
+- Always verify signatures before processing notifications
+- Implement idempotency checks to avoid processing the same payment twice
+- Use `respondSuccess()` or `respondError()` to send proper responses to Telebirr
+- Log all notifications for audit and debugging purposes
 
 ## Security & Requirements
 
