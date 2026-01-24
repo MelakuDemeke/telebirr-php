@@ -124,51 +124,24 @@ class Signer
      * - MGF: MGF1 with SHA256
      * - Salt Length: 32 bytes (equal to hash length)
      *
-     * Uses OpenSSL CLI for signing:
-     * openssl dgst -sha256 -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:32
-     *        -sigopt rsa_mgf1_md:sha256 -sign {private_key} -out {signature} {text}
+     * Uses phpseclib (pure-PHP). No OpenSSL CLI required; works on all platforms including Windows.
      *
      * @param string $text The canonical string to sign (e.g., "key1=value1&key2=value2")
      * @return string Base64-encoded signature
-     * @throws \RuntimeException if OpenSSL signing fails
+     * @throws \RuntimeException if signing fails
      */
     public function signString(string $text): string
     {
-        $tempKeyFile  = tempnam(sys_get_temp_dir(), 'tb_key_');
-        $tempTextFile = tempnam(sys_get_temp_dir(), 'tb_text_');
+        /** @var \phpseclib3\Crypt\RSA\PrivateKey $private */
+        $private = \phpseclib3\Crypt\PublicKeyLoader::load($this->config->privateKey);
+        $private = $private->withPadding(\phpseclib3\Crypt\RSA::SIGNATURE_PSS)
+            ->withHash('sha256')
+            ->withMGFHash('sha256')
+            ->withSaltLength(32);
 
-        file_put_contents($tempKeyFile, $this->config->privateKey);
-        file_put_contents($tempTextFile, $text);
+        $signature = $private->sign($text);
 
-        try {
-            $tempSigFile = tempnam(sys_get_temp_dir(), 'tb_sig_');
-
-            $command = sprintf(
-                'openssl dgst -sha256 -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:32 -sigopt rsa_mgf1_md:sha256 -sign %s -out %s %s 2>&1',
-                escapeshellarg($tempKeyFile),
-                escapeshellarg($tempSigFile),
-                escapeshellarg($tempTextFile)
-            );
-
-            $output    = [];
-            $returnVar = 0;
-            exec($command, $output, $returnVar);
-
-            if ($returnVar !== 0 || !file_exists($tempSigFile)) {
-                $errorMsg = implode("\n", $output);
-                throw new \RuntimeException('OpenSSL signing failed: ' . $errorMsg);
-            }
-
-            $signature = file_get_contents($tempSigFile);
-
-            return base64_encode($signature);
-        } finally {
-            @unlink($tempKeyFile);
-            @unlink($tempTextFile);
-            if (isset($tempSigFile)) {
-                @unlink($tempSigFile);
-            }
-        }
+        return base64_encode($signature);
     }
 
     public static function createTimeStamp(): string

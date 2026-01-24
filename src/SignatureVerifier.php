@@ -230,31 +230,20 @@ class SignatureVerifier
     }
 
     /**
-     * Verify signature using RSA-PSS SHA256
-     * 
-     * Uses OpenSSL CLI since PHP's openssl_verify doesn't directly support RSA-PSS
-     * 
+     * Verify signature using RSA-PSS SHA256.
+     *
+     * Uses phpseclib (pure-PHP). No OpenSSL CLI required; works on all platforms including Windows.
+     *
      * @param string $data The canonical string that was signed
      * @param string $signature Base64-encoded signature (may be URL-encoded)
      * @param string $publicKey Public key in PEM format
      * @return bool True if signature is valid
-     * @throws \RuntimeException if verification fails
      */
     private static function verifySignature(string $data, string $signature, string $publicKey): bool
     {
-        // Save public key to temporary file
-        $tempKeyFile = tempnam(sys_get_temp_dir(), 'tb_pubkey_');
-        file_put_contents($tempKeyFile, $publicKey);
-
-        // Save data to temporary file
-        $tempDataFile = tempnam(sys_get_temp_dir(), 'tb_data_');
-        file_put_contents($tempDataFile, $data);
-
-        // Decode signature using multiple strategies
         $decodeResult = self::decodeSignature($signature);
 
         if ($decodeResult === false) {
-            // Enhanced error logging with context
             $errorDetails = [
                 'Signature length: ' . strlen($signature),
                 'First 50 chars: ' . substr($signature, 0, 50),
@@ -262,54 +251,19 @@ class SignatureVerifier
                 'Decoding attempts: All failed (as-is, space-to-plus, url-decode-then-space-fix, url-decode)',
             ];
             error_log('SignatureVerifier: Failed to decode base64 signature. ' . implode(', ', $errorDetails));
-            @unlink($tempKeyFile);
-            @unlink($tempDataFile);
             return false;
         }
 
         $signatureBinary = $decodeResult['decoded'];
-        $successfulAttempt = $decodeResult['attempt'];
 
-        $tempSigFile = tempnam(sys_get_temp_dir(), 'tb_sig_');
-        file_put_contents($tempSigFile, $signatureBinary);
+        /** @var \phpseclib3\Crypt\RSA\PublicKey $pub */
+        $pub = \phpseclib3\Crypt\PublicKeyLoader::load($publicKey);
+        $pub = $pub->withPadding(\phpseclib3\Crypt\RSA::SIGNATURE_PSS)
+            ->withHash('sha256')
+            ->withMGFHash('sha256')
+            ->withSaltLength(32);
 
-        try {
-            // Use OpenSSL CLI to verify RSA-PSS SHA256 signature
-            // openssl dgst -sha256 -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:32 
-            //        -sigopt rsa_mgf1_md:sha256 -verify pubkey.pem -signature sig.bin data.txt
-            $command = sprintf(
-                'openssl dgst -sha256 -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:32 -sigopt rsa_mgf1_md:sha256 -verify %s -signature %s %s 2>&1',
-                escapeshellarg($tempKeyFile),
-                escapeshellarg($tempSigFile),
-                escapeshellarg($tempDataFile)
-            );
-
-            $output = [];
-            $returnVar = 0;
-            exec($command, $output, $returnVar);
-
-            // Enhanced error logging with context if verification fails
-            if ($returnVar !== 0) {
-                $errorDetails = [
-                    'Return code: ' . $returnVar,
-                    'Signature length: ' . strlen($signature),
-                    'First 50 chars: ' . substr($signature, 0, 50),
-                    'Canonical string length: ' . strlen($data),
-                    'Successful decoding attempt: ' . $successfulAttempt,
-                    'Decoded signature size: ' . strlen($signatureBinary) . ' bytes',
-                    'OpenSSL output: ' . implode(' ', $output),
-                ];
-                error_log('SignatureVerifier: OpenSSL verification failed. ' . implode(', ', $errorDetails));
-            }
-
-            // OpenSSL returns 0 on success, non-zero on failure
-            return $returnVar === 0;
-        } finally {
-            // Clean up temporary files
-            @unlink($tempKeyFile);
-            @unlink($tempDataFile);
-            @unlink($tempSigFile);
-        }
+        return $pub->verify($data, $signatureBinary);
     }
 
     /**

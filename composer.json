@@ -17,7 +17,8 @@
     "require": {
         "php": ">=7.4.0",
         "ext-curl": "*",
-        "ext-openssl": "*"
+        "ext-openssl": "*",
+        "phpseclib/phpseclib": "^3.0"
     },
     "suggest": {
         "psr/log": "For PSR-3 compatible logging (optional)"
