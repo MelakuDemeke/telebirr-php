@@ -50,7 +50,7 @@ class Config
 
         // redirectUrl is optional - where Telebirr redirects user after payment
         $this->redirectUrl = $options['redirectUrl'] ?? null;
-        
+
         // telebirrPublicKey is optional - used for verifying signatures from return URLs and notifications
         $this->telebirrPublicKey = $options['telebirrPublicKey'] ?? null;
     }
@@ -65,7 +65,7 @@ class Config
     private function setEnvironmentUrls(string $environment): void
     {
         $env = strtolower($environment);
-        
+
         if ($env === 'test' || $env === 'development' || $env === 'dev' || $env === 'sandbox') {
             $this->baseUrl    = self::BASE_URL_TEST;
             $this->webBaseUrl = self::WEB_BASE_URL_TEST;
@@ -120,20 +120,20 @@ class Config
         if (!isset($options['environment'])) {
             // Try TELEBIRR_ENVIRONMENT first
             $env = getenv('TELEBIRR_ENVIRONMENT');
-            
+
             // Fall back to APP_ENV
             if ($env === false) {
                 $env = getenv('APP_ENV');
             }
-            
+
             // Default to test if not set
             if ($env === false) {
                 $env = 'test';
             }
-            
+
             $options['environment'] = $env;
         }
-        
+
         return new self($options);
     }
 
@@ -149,7 +149,7 @@ class Config
         } elseif (strpos($this->baseUrl, 'telebirrappcube') !== false) {
             return 'production';
         }
-        
+
         // Unknown environment
         return 'unknown';
     }
@@ -186,7 +186,7 @@ class Config
     public function validate(bool $throwException = true): bool
     {
         $errors = [];
-        
+
         // Required fields
         if (empty($this->fabricAppId)) {
             $errors[] = "fabricAppId is required";
@@ -206,7 +206,7 @@ class Config
         if (empty($this->notifyUrl)) {
             $errors[] = "notifyUrl is required";
         }
-        
+
         // Validate private key format
         if (!empty($this->privateKey)) {
             if (!preg_match('/-----BEGIN PRIVATE KEY-----/', $this->privateKey)) {
@@ -216,7 +216,7 @@ class Config
                 $errors[] = "privateKey must be in PEM format (should end with '-----END PRIVATE KEY-----')";
             }
         }
-        
+
         // Validate URLs
         if (!empty($this->notifyUrl)) {
             try {
@@ -225,7 +225,7 @@ class Config
                 $errors[] = "notifyUrl validation failed: " . $e->getMessage();
             }
         }
-        
+
         if (!empty($this->redirectUrl)) {
             try {
                 ParameterValidator::validateUrl($this->redirectUrl, 'redirectUrl');
@@ -233,19 +233,19 @@ class Config
                 $errors[] = "redirectUrl validation failed: " . $e->getMessage();
             }
         }
-        
+
         // Validate merchant code format (should be 6 digits)
         if (!empty($this->merchantCode) && !preg_match('/^\d{6}$/', $this->merchantCode)) {
             $errors[] = "merchantCode should be 6 digits (got: '{$this->merchantCode}')";
         }
-        
+
         if (!empty($errors)) {
             if ($throwException) {
                 throw new ConfigurationException($errors);
             }
             return false;
         }
-        
+
         return true;
     }
 
@@ -257,11 +257,11 @@ class Config
     public function isComplete(): bool
     {
         return !empty($this->fabricAppId) &&
-               !empty($this->appSecret) &&
-               !empty($this->merchantAppId) &&
-               !empty($this->merchantCode) &&
-               !empty($this->privateKey) &&
-               !empty($this->notifyUrl);
+            !empty($this->appSecret) &&
+            !empty($this->merchantAppId) &&
+            !empty($this->merchantCode) &&
+            !empty($this->privateKey) &&
+            !empty($this->notifyUrl);
     }
 
     /**
@@ -272,7 +272,7 @@ class Config
     public function getMissingFields(): array
     {
         $missing = [];
-        
+
         if (empty($this->fabricAppId)) {
             $missing[] = 'fabricAppId';
         }
@@ -291,7 +291,7 @@ class Config
         if (empty($this->notifyUrl)) {
             $missing[] = 'notifyUrl';
         }
-        
+
         return $missing;
     }
 
@@ -307,7 +307,7 @@ class Config
         if ($env === 'unknown') {
             throw new \InvalidArgumentException(
                 "Unable to determine environment from baseUrl: '{$this->baseUrl}'. " .
-                "Use Config::forTest() or Config::forProduction() to set environment explicitly."
+                    "Use Config::forTest() or Config::forProduction() to set environment explicitly."
             );
         }
         return $env;

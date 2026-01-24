@@ -74,13 +74,13 @@ class ParameterValidator
         $invalidCharsList = implode("', '", array_keys($invalidChars));
 
         $message = "Invalid merchant order ID: '{$merchantOrderId}'\n" .
-                   "Reason: Contains invalid character(s): '{$invalidCharsList}'\n" .
-                   "Required format: Alphanumeric only (A-Z, a-z, 0-9)\n" .
-                   "Example: 'ORDER1234567890' or '176924750778146F8A'\n" .
-                   "Current value: '{$merchantOrderId}'";
+            "Reason: Contains invalid character(s): '{$invalidCharsList}'\n" .
+            "Required format: Alphanumeric only (A-Z, a-z, 0-9)\n" .
+            "Example: 'ORDER1234567890' or '176924750778146F8A'\n" .
+            "Current value: '{$merchantOrderId}'";
 
         $suggestion = "Remove all non-alphanumeric characters. " .
-                     "For example, 'ORDER_123' should be 'ORDER123'";
+            "For example, 'ORDER_123' should be 'ORDER123'";
 
         throw new InvalidParameterException('merchantOrderId', $merchantOrderId, $message, $suggestion);
     }
@@ -116,13 +116,13 @@ class ParameterValidator
                 $invalidCharsList = implode("', '", $invalidChars);
 
                 $message = "Invalid title: '{$title}'\n" .
-                          "Reason: Contains invalid character(s): '{$invalidCharsList}'\n" .
-                          "Required format: Must not contain: ~`!#$%^*()\\-+=|/<>?;:\"[]{}\\\\&\n" .
-                          "Example: 'Test Order' or 'Product Purchase'\n" .
-                          "Current value: '{$title}'";
+                    "Reason: Contains invalid character(s): '{$invalidCharsList}'\n" .
+                    "Required format: Must not contain: ~`!#$%^*()\\-+=|/<>?;:\"[]{}\\\\&\n" .
+                    "Example: 'Test Order' or 'Product Purchase'\n" .
+                    "Current value: '{$title}'";
 
                 $suggestion = "Remove special characters. " .
-                             "For example, 'Order #123' should be 'Order 123'";
+                    "For example, 'Order #123' should be 'Order 123'";
 
                 throw new InvalidParameterException('title', $title, $message, $suggestion);
             }
@@ -175,16 +175,16 @@ class ParameterValidator
         if (!is_numeric($amount)) {
             $type = gettype($amount);
             $message = "Invalid amount: '{$amount}'\n" .
-                      "Reason: Must be numeric, got {$type}\n" .
-                      "Example: '10.00' or 10.00 or 10";
+                "Reason: Must be numeric, got {$type}\n" .
+                "Example: '10.00' or 10.00 or 10";
             throw new InvalidParameterException('amount', $amount, $message, "Use a numeric value like '10.00' or 10");
         }
 
         $floatAmount = (float) $amount;
         if ($floatAmount <= 0) {
             $message = "Invalid amount: '{$amount}'\n" .
-                      "Reason: Amount must be positive (greater than 0)\n" .
-                      "Example: '0.10' or '10.00'";
+                "Reason: Amount must be positive (greater than 0)\n" .
+                "Example: '0.10' or '10.00'";
             throw new InvalidParameterException('amount', $amount, $message, "Use a positive number like '0.10' or '10.00'");
         }
 
@@ -213,8 +213,8 @@ class ParameterValidator
 
         if (!filter_var($url, FILTER_VALIDATE_URL)) {
             $message = "Invalid {$type}: '{$url}'\n" .
-                      "Reason: Must be a valid URL format\n" .
-                      "Example: 'https://example.com/notify.php'";
+                "Reason: Must be a valid URL format\n" .
+                "Example: 'https://example.com/notify.php'";
             throw new InvalidParameterException($type, $url, $message, "Use a valid URL format starting with http:// or https://");
         }
 

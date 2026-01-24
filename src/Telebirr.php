@@ -540,11 +540,11 @@ class Telebirr
 		// Check for API-level error responses
 		if (isset($result['code']) && $result['code'] !== '00000' && $result['code'] !== '0') {
 			$errorMsg = $this->formatApiErrorResponse('Refund order', $result);
-			
+
 			// Add specific context for refund errors
 			$errorCode = $result['code'] ?? $result['errorCode'] ?? 'Unknown';
 			$errorMessage = $result['message'] ?? $result['msg'] ?? $result['errorMsg'] ?? 'Unknown error';
-			
+
 			if ($errorCode === '60320025' || strpos($errorMessage, 'failed to call the payment platform') !== false) {
 				$errorMsg .= "\n\n⚠️ This error typically indicates:\n";
 				$errorMsg .= "1. You may be using a development/sandbox environment where refunds are not enabled\n";
@@ -557,7 +557,7 @@ class Telebirr
 				$errorMsg .= "- The original payment was successfully completed\n";
 				$errorMsg .= "- Contact Telebirr support if refunds are required for your account";
 			}
-			
+
 			$this->logger->error($errorMsg, ['error_code' => $errorCode, 'response' => $result]);
 			throw new \RuntimeException($errorMsg);
 		}
@@ -760,8 +760,8 @@ class Telebirr
 		];
 
 		// Generate refund_request_no (required) - use provided refundOrderId or auto-generate
-		$refundRequestNo = !empty($refundOrderId) 
-			? $refundOrderId 
+		$refundRequestNo = !empty($refundOrderId)
+			? $refundOrderId
 			: ParameterValidator::generateMerchantOrderId();
 
 		$biz = [
@@ -897,7 +897,7 @@ class Telebirr
 	private function sanitizeLogData(array $data): array
 	{
 		$sanitized = $data;
-		
+
 		// Remove or mask sensitive fields
 		if (isset($sanitized['biz_content'])) {
 			$biz = $sanitized['biz_content'];
@@ -906,12 +906,12 @@ class Telebirr
 				$sanitized['biz_content']['privateKey'] = '[REDACTED]';
 			}
 		}
-		
+
 		// Don't log full signature
 		if (isset($sanitized['sign'])) {
 			$sanitized['sign'] = substr($sanitized['sign'], 0, 20) . '...';
 		}
-		
+
 		return $sanitized;
 	}
 
@@ -926,14 +926,14 @@ class Telebirr
 	private function formatApiError(string $operation, int $httpCode, string $responseBody): string
 	{
 		$message = "{$operation} API returned HTTP {$httpCode}";
-		
+
 		// Try to parse error response
 		$errorData = json_decode($responseBody, true);
 		if (is_array($errorData)) {
 			$errorCode = $errorData['errorCode'] ?? $errorData['code'] ?? null;
 			$errorMsg = $errorData['errorMsg'] ?? $errorData['message'] ?? $errorData['msg'] ?? null;
 			$errorSolution = $errorData['errorSolution'] ?? null;
-			
+
 			if ($errorCode) {
 				$message .= "\nError Code: {$errorCode}";
 			}
@@ -943,7 +943,7 @@ class Telebirr
 			if ($errorSolution) {
 				$message .= "\nSolution: {$errorSolution}";
 			}
-			
+
 			// Add specific help for common error codes
 			if ($errorCode === '49401024995') {
 				$message .= "\n\nThis error indicates a parameter validation issue.";
@@ -955,7 +955,7 @@ class Telebirr
 		} else {
 			$message .= ": {$responseBody}";
 		}
-		
+
 		return $message;
 	}
 
@@ -971,13 +971,13 @@ class Telebirr
 		$errorCode = $result['code'] ?? $result['errorCode'] ?? 'Unknown';
 		$errorMsg = $result['message'] ?? $result['msg'] ?? $result['errorMsg'] ?? 'Unknown error';
 		$errorSolution = $result['errorSolution'] ?? null;
-		
+
 		$message = "{$operation} API error (code: {$errorCode}): {$errorMsg}";
-		
+
 		if ($errorSolution) {
 			$message .= "\nSolution: {$errorSolution}";
 		}
-		
+
 		// Add specific help for common error codes
 		if ($errorCode === '49401024995') {
 			$message .= "\n\nThis error indicates a parameter validation issue.";
@@ -992,7 +992,7 @@ class Telebirr
 			$message .= "\n- Account permissions issue";
 			$message .= "\n- Environment mismatch (test vs production)";
 		}
-		
+
 		return $message;
 	}
 }
