@@ -172,8 +172,8 @@ $refundResult = $client->refundOrder(
 
 - PHP >= 7.4
 - `ext-curl` extension
-- `ext-openssl` extension
-- **phpseclib/phpseclib** (^3.0) — used for RSA-PSS signing and verification. Pure-PHP; no OpenSSL CLI required. Works on all platforms including Windows. Algorithm: RSA-PSS, SHA256, MGF1-SHA256, salt length 32.
+- `ext-openssl` extension (used by `notify.php` for payload decryption only)
+- **phpseclib/phpseclib** (^3.0) — **Signer** and **SignatureVerifier** use phpseclib only (pure-PHP). No OpenSSL CLI or ext-openssl required for signing/verification. Works on all platforms including Windows. Algorithm: RSA-PSS, SHA256, MGF1-SHA256, salt length 32.
 
 ## 📚 Documentation
 

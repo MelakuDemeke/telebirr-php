@@ -311,28 +311,25 @@ class SignatureVerifier
 
     /**
      * Extract public key from private key
-     * 
+     *
      * If Telebirr signs using your private key, you can extract your public key
      * from your private key and use it to verify their signatures.
-     * 
+     *
+     * Uses phpseclib (pure-PHP). No OpenSSL extension required.
+     *
      * @param string $privateKey Private key in PEM format
-     * @return string Public key in PEM format
+     * @return string Public key in PEM format (PKCS8 / SPKI)
      * @throws \RuntimeException if private key is invalid or extraction fails
      */
     public static function extractPublicKeyFromPrivateKey(string $privateKey): string
     {
-        $privateKeyResource = openssl_pkey_get_private($privateKey);
-
-        if (!$privateKeyResource) {
-            throw new \RuntimeException('Invalid private key format');
+        try {
+            /** @var \phpseclib3\Crypt\RSA\PrivateKey $private */
+            $private = \phpseclib3\Crypt\PublicKeyLoader::load($privateKey);
+            $pub = $private->getPublicKey();
+            return $pub->toString('PKCS8');
+        } catch (\Throwable $e) {
+            throw new \RuntimeException('Invalid private key or failed to extract public key: ' . $e->getMessage());
         }
-
-        $publicKeyDetails = openssl_pkey_get_details($privateKeyResource);
-
-        if (!$publicKeyDetails || !isset($publicKeyDetails['key'])) {
-            throw new \RuntimeException('Failed to extract public key from private key');
-        }
-
-        return $publicKeyDetails['key'];
     }
 }
