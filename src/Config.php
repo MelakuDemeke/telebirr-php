@@ -1,6 +1,11 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Melaku\Telebirr;
+
+use Melaku\Telebirr\Exceptions\ConfigurationException;
+use Melaku\Telebirr\ParameterValidator;
 
 class Config
 {
@@ -167,5 +172,144 @@ class Config
     public function isProduction(): bool
     {
         return $this->getEnvironment() === 'production';
+    }
+
+    /**
+     * Validate configuration completeness and correctness
+     * 
+     * Checks all required fields and validates formats
+     * 
+     * @param bool $throwException If true, throws exception on validation failure
+     * @return bool True if configuration is valid
+     * @throws ConfigurationException if validation fails and throwException is true
+     */
+    public function validate(bool $throwException = true): bool
+    {
+        $errors = [];
+        
+        // Required fields
+        if (empty($this->fabricAppId)) {
+            $errors[] = "fabricAppId is required";
+        }
+        if (empty($this->appSecret)) {
+            $errors[] = "appSecret is required";
+        }
+        if (empty($this->merchantAppId)) {
+            $errors[] = "merchantAppId is required";
+        }
+        if (empty($this->merchantCode)) {
+            $errors[] = "merchantCode is required";
+        }
+        if (empty($this->privateKey)) {
+            $errors[] = "privateKey is required";
+        }
+        if (empty($this->notifyUrl)) {
+            $errors[] = "notifyUrl is required";
+        }
+        
+        // Validate private key format
+        if (!empty($this->privateKey)) {
+            if (!preg_match('/-----BEGIN PRIVATE KEY-----/', $this->privateKey)) {
+                $errors[] = "privateKey must be in PEM format (should start with '-----BEGIN PRIVATE KEY-----')";
+            }
+            if (!preg_match('/-----END PRIVATE KEY-----/', $this->privateKey)) {
+                $errors[] = "privateKey must be in PEM format (should end with '-----END PRIVATE KEY-----')";
+            }
+        }
+        
+        // Validate URLs
+        if (!empty($this->notifyUrl)) {
+            try {
+                ParameterValidator::validateUrl($this->notifyUrl, 'notifyUrl');
+            } catch (\Exception $e) {
+                $errors[] = "notifyUrl validation failed: " . $e->getMessage();
+            }
+        }
+        
+        if (!empty($this->redirectUrl)) {
+            try {
+                ParameterValidator::validateUrl($this->redirectUrl, 'redirectUrl');
+            } catch (\Exception $e) {
+                $errors[] = "redirectUrl validation failed: " . $e->getMessage();
+            }
+        }
+        
+        // Validate merchant code format (should be 6 digits)
+        if (!empty($this->merchantCode) && !preg_match('/^\d{6}$/', $this->merchantCode)) {
+            $errors[] = "merchantCode should be 6 digits (got: '{$this->merchantCode}')";
+        }
+        
+        if (!empty($errors)) {
+            if ($throwException) {
+                throw new ConfigurationException($errors);
+            }
+            return false;
+        }
+        
+        return true;
+    }
+
+    /**
+     * Check if all required fields are set
+     * 
+     * @return bool True if all required fields are present
+     */
+    public function isComplete(): bool
+    {
+        return !empty($this->fabricAppId) &&
+               !empty($this->appSecret) &&
+               !empty($this->merchantAppId) &&
+               !empty($this->merchantCode) &&
+               !empty($this->privateKey) &&
+               !empty($this->notifyUrl);
+    }
+
+    /**
+     * Get missing required fields
+     * 
+     * @return array Array of missing field names
+     */
+    public function getMissingFields(): array
+    {
+        $missing = [];
+        
+        if (empty($this->fabricAppId)) {
+            $missing[] = 'fabricAppId';
+        }
+        if (empty($this->appSecret)) {
+            $missing[] = 'appSecret';
+        }
+        if (empty($this->merchantAppId)) {
+            $missing[] = 'merchantAppId';
+        }
+        if (empty($this->merchantCode)) {
+            $missing[] = 'merchantCode';
+        }
+        if (empty($this->privateKey)) {
+            $missing[] = 'privateKey';
+        }
+        if (empty($this->notifyUrl)) {
+            $missing[] = 'notifyUrl';
+        }
+        
+        return $missing;
+    }
+
+    /**
+     * Validate environment setting
+     * 
+     * @return string Validated environment ('test' or 'production')
+     * @throws \InvalidArgumentException if environment is invalid
+     */
+    public function validateEnvironment(): string
+    {
+        $env = $this->getEnvironment();
+        if ($env === 'unknown') {
+            throw new \InvalidArgumentException(
+                "Unable to determine environment from baseUrl: '{$this->baseUrl}'. " .
+                "Use Config::forTest() or Config::forProduction() to set environment explicitly."
+            );
+        }
+        return $env;
     }
 }

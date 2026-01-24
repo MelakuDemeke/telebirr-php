@@ -1,6 +1,12 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Melaku\Telebirr;
+
+use Melaku\Telebirr\Logger\LoggerInterface;
+use Melaku\Telebirr\Logger\NullLogger;
+use Melaku\Telebirr\Exceptions\InvalidParameterException;
 
 /**
  * Telebirr Web Checkout client (modern API).
@@ -12,11 +18,24 @@ class Telebirr
 {
 	private Config $config;
 	private Signer $signer;
+	private LoggerInterface $logger;
 
-	public function __construct(Config $config)
+	public function __construct(Config $config, ?LoggerInterface $logger = null)
 	{
 		$this->config = $config;
 		$this->signer = new Signer($config);
+		$this->logger = $logger ?? new NullLogger();
+	}
+
+	/**
+	 * Set logger for API request/response logging
+	 * 
+	 * @param LoggerInterface $logger Logger instance
+	 * @return void
+	 */
+	public function setLogger(LoggerInterface $logger): void
+	{
+		$this->logger = $logger;
 	}
 
 	/**
@@ -57,28 +76,37 @@ class Telebirr
 		$httpCode     = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 		curl_close($ch);
 
+		// Log request
+		$this->logRequest('applyFabricToken', $url, ['appSecret' => '[REDACTED]']);
+
 		if ($responseBody === false) {
-			throw new \RuntimeException('Failed to call token API: ' . ($error ?: 'Unknown cURL error'));
+			$errorMsg = 'Failed to call token API: ' . ($error ?: 'Unknown cURL error');
+			$this->logger->error($errorMsg);
+			throw new \RuntimeException($errorMsg);
 		}
+
+		// Log response
+		$this->logResponse('applyFabricToken', $httpCode, $responseBody);
 
 		// Validate HTTP status code (should be 200-299 for success)
 		if ($httpCode < 200 || $httpCode >= 300) {
-			throw new \RuntimeException(
-				'Token API returned HTTP ' . $httpCode . ': ' . $responseBody
-			);
+			$errorMsg = $this->formatApiError('Token', $httpCode, $responseBody);
+			$this->logger->error($errorMsg, ['http_code' => $httpCode, 'response' => $responseBody]);
+			throw new \RuntimeException($errorMsg);
 		}
 
 		$result = json_decode($responseBody, true);
 		if (!is_array($result)) {
-			throw new \RuntimeException('Invalid token API response (not JSON): ' . $responseBody);
+			$errorMsg = 'Invalid token API response (not JSON): ' . $responseBody;
+			$this->logger->error($errorMsg);
+			throw new \RuntimeException($errorMsg);
 		}
 
 		// Check for API-level error responses
 		if (isset($result['code']) && $result['code'] !== '00000' && $result['code'] !== '0') {
-			$errorMsg = $result['message'] ?? $result['msg'] ?? 'Unknown error';
-			throw new \RuntimeException(
-				'Token API error (code: ' . $result['code'] . '): ' . $errorMsg
-			);
+			$errorMsg = $this->formatApiErrorResponse('Token', $result);
+			$this->logger->error($errorMsg, ['error_code' => $result['code'], 'response' => $result]);
+			throw new \RuntimeException($errorMsg);
 		}
 
 		// Validate that token exists in response
@@ -127,21 +155,39 @@ class Telebirr
 	 * - Success Response: { "biz_content": { "prepay_id": "...", ... }, ... }
 	 * - Error Response: { "code": "...", "message": "...", ... }
 	 *
-	 * @param string      $fabricToken  "Bearer xxx" from applyFabricToken()
-	 * @param string      $title        Order title
-	 * @param string|int|float $amount  Total amount (ETB) - will be formatted to 2 decimals
+	 * @param string $fabricToken "Bearer xxx" from applyFabricToken()
+	 * @param string $title Order title (will be automatically sanitized)
+	 * @param string|int|float $amount Total amount (ETB) - will be formatted to 2 decimals
 	 * @param string|null $merchOrderId Optional merchant order ID; if null, one is auto-generated
 	 *
 	 * @return array Full API response (contains biz_content.prepay_id on success)
 	 * @throws \RuntimeException on API errors, invalid responses, or missing prepay_id
+	 * @throws InvalidParameterException on parameter validation failures
 	 */
 	public function createOrder(string $fabricToken, string $title, $amount, ?string $merchOrderId = null): array
 	{
+		// Validate and sanitize parameters
+		try {
+			$title = ParameterValidator::validateTitle($title, true);
+			$amount = ParameterValidator::validateAmount($amount);
+			$merchOrderId = ParameterValidator::validateMerchantOrderId($merchOrderId, true);
+		} catch (InvalidParameterException $e) {
+			$this->logger->error('Parameter validation failed in createOrder', [
+				'parameter' => $e->getParameterName(),
+				'value' => $e->getParameterValue(),
+				'message' => $e->getMessage()
+			]);
+			throw $e;
+		}
+
 		$reqObject = $this->buildPreOrderRequest($title, $amount, $merchOrderId);
 
 		$url = $this->config->baseUrl . '/payment/v1/merchant/preOrder';
 
 		$payload = json_encode($reqObject);
+
+		// Log request
+		$this->logRequest('createOrder', $url, $reqObject);
 
 		$ch = curl_init($url);
 		curl_setopt_array($ch, [
@@ -162,28 +208,34 @@ class Telebirr
 		$httpCode     = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 		curl_close($ch);
 
+		// Log response
+		$this->logResponse('createOrder', $httpCode, $responseBody);
+
 		if ($responseBody === false) {
-			throw new \RuntimeException('Failed to call create order API: ' . ($error ?: 'Unknown cURL error'));
+			$errorMsg = 'Failed to call create order API: ' . ($error ?: 'Unknown cURL error');
+			$this->logger->error($errorMsg);
+			throw new \RuntimeException($errorMsg);
 		}
 
 		// Validate HTTP status code (should be 200-299 for success)
 		if ($httpCode < 200 || $httpCode >= 300) {
-			throw new \RuntimeException(
-				'Create order API returned HTTP ' . $httpCode . ': ' . $responseBody
-			);
+			$errorMsg = $this->formatApiError('Create order', $httpCode, $responseBody);
+			$this->logger->error($errorMsg, ['http_code' => $httpCode, 'response' => $responseBody]);
+			throw new \RuntimeException($errorMsg);
 		}
 
 		$result = json_decode($responseBody, true);
 		if (!is_array($result)) {
-			throw new \RuntimeException('Invalid create order API response (not JSON): ' . $responseBody);
+			$errorMsg = 'Invalid create order API response (not JSON): ' . $responseBody;
+			$this->logger->error($errorMsg);
+			throw new \RuntimeException($errorMsg);
 		}
 
 		// Check for API-level error responses
 		if (isset($result['code']) && $result['code'] !== '00000' && $result['code'] !== '0') {
-			$errorMsg = $result['message'] ?? $result['msg'] ?? 'Unknown error';
-			throw new \RuntimeException(
-				'Create order API error (code: ' . $result['code'] . '): ' . $errorMsg
-			);
+			$errorMsg = $this->formatApiErrorResponse('Create order', $result);
+			$this->logger->error($errorMsg, ['error_code' => $result['code'], 'response' => $result]);
+			throw new \RuntimeException($errorMsg);
 		}
 
 		// Validate prepay_id in response (per requestCreateOrder spec)
@@ -259,17 +311,32 @@ class Telebirr
 	 * - Success Response: { "biz_content": { "trade_status": "...", "payment_order_id": "...", ... }, ... }
 	 * - Error Response: { "code": "...", "message": "...", ... }
 	 *
-	 * @param string      $fabricToken  "Bearer xxx" from applyFabricToken()
-	 * @param string|null $prepayId     Optional: prepay_id from createOrder response
+	 * @param string $fabricToken "Bearer xxx" from applyFabricToken()
+	 * @param string|null $prepayId Optional: prepay_id from createOrder response
 	 * @param string|null $merchOrderId Optional: merchant order ID (at least one must be provided)
 	 *
 	 * @return array Full API response (contains biz_content with order status on success)
 	 * @throws \RuntimeException on API errors, invalid responses, or if both prepayId and merchOrderId are null
+	 * @throws InvalidParameterException on parameter validation failures
 	 */
 	public function queryOrder(string $fabricToken, ?string $prepayId = null, ?string $merchOrderId = null): array
 	{
 		if (empty($prepayId) && empty($merchOrderId)) {
 			throw new \InvalidArgumentException('Either prepayId or merchOrderId must be provided');
+		}
+
+		// Validate merchant order ID if provided
+		if (!empty($merchOrderId)) {
+			try {
+				$merchOrderId = ParameterValidator::validateMerchantOrderId($merchOrderId, true);
+			} catch (InvalidParameterException $e) {
+				$this->logger->error('Parameter validation failed in queryOrder', [
+					'parameter' => $e->getParameterName(),
+					'value' => $e->getParameterValue(),
+					'message' => $e->getMessage()
+				]);
+				throw $e;
+			}
 		}
 
 		$reqObject = $this->buildQueryOrderRequest($prepayId, $merchOrderId);
@@ -297,28 +364,34 @@ class Telebirr
 		$httpCode     = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 		curl_close($ch);
 
+		// Log response
+		$this->logResponse('queryOrder', $httpCode, $responseBody);
+
 		if ($responseBody === false) {
-			throw new \RuntimeException('Failed to call query order API: ' . ($error ?: 'Unknown cURL error'));
+			$errorMsg = 'Failed to call query order API: ' . ($error ?: 'Unknown cURL error');
+			$this->logger->error($errorMsg);
+			throw new \RuntimeException($errorMsg);
 		}
 
 		// Validate HTTP status code (should be 200-299 for success)
 		if ($httpCode < 200 || $httpCode >= 300) {
-			throw new \RuntimeException(
-				'Query order API returned HTTP ' . $httpCode . ': ' . $responseBody
-			);
+			$errorMsg = $this->formatApiError('Query order', $httpCode, $responseBody);
+			$this->logger->error($errorMsg, ['http_code' => $httpCode, 'response' => $responseBody]);
+			throw new \RuntimeException($errorMsg);
 		}
 
 		$result = json_decode($responseBody, true);
 		if (!is_array($result)) {
-			throw new \RuntimeException('Invalid query order API response (not JSON): ' . $responseBody);
+			$errorMsg = 'Invalid query order API response (not JSON): ' . $responseBody;
+			$this->logger->error($errorMsg);
+			throw new \RuntimeException($errorMsg);
 		}
 
 		// Check for API-level error responses
 		if (isset($result['code']) && $result['code'] !== '00000' && $result['code'] !== '0') {
-			$errorMsg = $result['message'] ?? $result['msg'] ?? 'Unknown error';
-			throw new \RuntimeException(
-				'Query order API error (code: ' . $result['code'] . '): ' . $errorMsg
-			);
+			$errorMsg = $this->formatApiErrorResponse('Query order', $result);
+			$this->logger->error($errorMsg, ['error_code' => $result['code'], 'response' => $result]);
+			throw new \RuntimeException($errorMsg);
 		}
 
 		return $result;
@@ -363,19 +436,39 @@ class Telebirr
 	 * - Error Response: { "code": "...", "message": "...", ... }
 	 *
 	 * @param string      $fabricToken  "Bearer xxx" from applyFabricToken()
-	 * @param string|int|float $refundAmount  Refund amount (ETB) - will be formatted to 2 decimals
+	 * @param string $fabricToken "Bearer xxx" from applyFabricToken()
+	 * @param string|int|float $refundAmount Refund amount (ETB) - will be formatted to 2 decimals
 	 * @param string|null $paymentOrderId Optional: payment_order_id from Telebirr
-	 * @param string|null $merchOrderId   Optional: merchant order ID (at least one must be provided)
-	 * @param string|null $refundReason   Optional: reason for refund
-	 * @param string|null $refundOrderId  Optional: refund_request_no (required by API, auto-generated if null)
+	 * @param string|null $merchOrderId Optional: merchant order ID (at least one must be provided)
+	 * @param string|null $refundReason Optional: reason for refund
+	 * @param string|null $refundOrderId Optional: refund_request_no (required by API, auto-generated if null)
 	 *
 	 * @return array Full API response (contains biz_content with refund status on success)
 	 * @throws \RuntimeException on API errors, invalid responses, or if both paymentOrderId and merchOrderId are null
+	 * @throws InvalidParameterException on parameter validation failures
 	 */
 	public function refundOrder(string $fabricToken, $refundAmount, ?string $paymentOrderId = null, ?string $merchOrderId = null, ?string $refundReason = null, ?string $refundOrderId = null): array
 	{
 		if (empty($paymentOrderId) && empty($merchOrderId)) {
 			throw new \InvalidArgumentException('Either paymentOrderId or merchOrderId must be provided');
+		}
+
+		// Validate parameters
+		try {
+			$refundAmount = ParameterValidator::validateAmount($refundAmount);
+			if (!empty($merchOrderId)) {
+				$merchOrderId = ParameterValidator::validateMerchantOrderId($merchOrderId, true);
+			}
+			if (!empty($refundOrderId)) {
+				$refundOrderId = ParameterValidator::validateMerchantOrderId($refundOrderId, true);
+			}
+		} catch (InvalidParameterException $e) {
+			$this->logger->error('Parameter validation failed in refundOrder', [
+				'parameter' => $e->getParameterName(),
+				'value' => $e->getParameterValue(),
+				'message' => $e->getMessage()
+			]);
+			throw $e;
 		}
 
 		$reqObject = $this->buildRefundOrderRequest($refundAmount, $paymentOrderId, $merchOrderId, $refundReason, $refundOrderId);
@@ -399,13 +492,21 @@ class Telebirr
 			CURLOPT_SSL_VERIFYHOST => false,
 		]);
 
+		// Log request
+		$this->logRequest('refundOrder', $url, $reqObject);
+
 		$responseBody = curl_exec($ch);
 		$error        = curl_error($ch);
 		$httpCode     = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 		curl_close($ch);
 
+		// Log response
+		$this->logResponse('refundOrder', $httpCode, $responseBody);
+
 		if ($responseBody === false) {
-			throw new \RuntimeException('Failed to call refund order API: ' . ($error ?: 'Unknown cURL error'));
+			$errorMsg = 'Failed to call refund order API: ' . ($error ?: 'Unknown cURL error');
+			$this->logger->error($errorMsg);
+			throw new \RuntimeException($errorMsg);
 		}
 
 		// Validate HTTP status code (should be 200-299 for success)
@@ -431,32 +532,34 @@ class Telebirr
 
 		$result = json_decode($responseBody, true);
 		if (!is_array($result)) {
-			throw new \RuntimeException('Invalid refund order API response (not JSON): ' . $responseBody);
+			$errorMsg = 'Invalid refund order API response (not JSON): ' . $responseBody;
+			$this->logger->error($errorMsg);
+			throw new \RuntimeException($errorMsg);
 		}
 
 		// Check for API-level error responses
 		if (isset($result['code']) && $result['code'] !== '00000' && $result['code'] !== '0') {
-			$errorMsg = $result['message'] ?? $result['msg'] ?? $result['errorMsg'] ?? 'Unknown error';
-			$errorCode = $result['code'] ?? $result['errorCode'] ?? 'Unknown';
+			$errorMsg = $this->formatApiErrorResponse('Refund order', $result);
 			
-			// Provide helpful context for common error codes
-			$errorContext = '';
-			if ($errorCode === '60320025' || strpos($errorMsg, 'failed to call the payment platform') !== false) {
-				$errorContext = "\n\n⚠️ This error typically indicates:\n";
-				$errorContext .= "1. You may be using a development/sandbox environment where refunds are not enabled\n";
-				$errorContext .= "2. Your account may not have refund permissions enabled\n";
-				$errorContext .= "3. The original payment may not be eligible for refund (e.g., not completed, too old, etc.)\n";
-				$errorContext .= "4. You may need to use the production environment for refunds\n";
-				$errorContext .= "\nPlease verify:\n";
-				$errorContext .= "- You're using the correct base URL (production vs development)\n";
-				$errorContext .= "- Your account has refund capabilities enabled\n";
-				$errorContext .= "- The original payment was successfully completed\n";
-				$errorContext .= "- Contact Telebirr support if refunds are required for your account";
+			// Add specific context for refund errors
+			$errorCode = $result['code'] ?? $result['errorCode'] ?? 'Unknown';
+			$errorMessage = $result['message'] ?? $result['msg'] ?? $result['errorMsg'] ?? 'Unknown error';
+			
+			if ($errorCode === '60320025' || strpos($errorMessage, 'failed to call the payment platform') !== false) {
+				$errorMsg .= "\n\n⚠️ This error typically indicates:\n";
+				$errorMsg .= "1. You may be using a development/sandbox environment where refunds are not enabled\n";
+				$errorMsg .= "2. Your account may not have refund permissions enabled\n";
+				$errorMsg .= "3. The original payment may not be eligible for refund (e.g., not completed, too old, etc.)\n";
+				$errorMsg .= "4. You may need to use the production environment for refunds\n";
+				$errorMsg .= "\nPlease verify:\n";
+				$errorMsg .= "- You're using the correct base URL (production vs development)\n";
+				$errorMsg .= "- Your account has refund capabilities enabled\n";
+				$errorMsg .= "- The original payment was successfully completed\n";
+				$errorMsg .= "- Contact Telebirr support if refunds are required for your account";
 			}
 			
-			throw new \RuntimeException(
-				'Refund order API error (code: ' . $errorCode . '): ' . $errorMsg . $errorContext
-			);
+			$this->logger->error($errorMsg, ['error_code' => $errorCode, 'response' => $result]);
+			throw new \RuntimeException($errorMsg);
 		}
 
 		return $result;
@@ -478,18 +581,22 @@ class Telebirr
 	 *
 	 * @see https://developer.ethiotelecom.et/docs/H5%20C2B%20Web%20Payment%20Integration%20Quick%20Guide/%20CheckOut
 	 *
-	 * @param string      $title        Order title
-	 * @param string|int|float $amount  Total amount (ETB)
+	 * @param string $title Order title (will be automatically sanitized)
+	 * @param string|int|float $amount Total amount (ETB) - will be formatted to 2 decimals
 	 * @param string|null $merchOrderId Optional merchant order ID; if null, one is generated
 	 *
 	 * @return string Checkout URL to redirect the user to (user will complete payment on Telebirr page)
+	 * @throws \RuntimeException on API errors
+	 * @throws InvalidParameterException on parameter validation failures
 	 */
 	public function createCheckoutUrl(string $title, $amount, ?string $merchOrderId = null): string
 	{
 		$tokenInfo   = $this->applyFabricToken();
 		$fabricToken = $tokenInfo['token'] ?? null;
 		if (!$fabricToken) {
-			throw new \RuntimeException('Fabric token missing in token response: ' . json_encode($tokenInfo));
+			$errorMsg = 'Fabric token missing in token response: ' . json_encode($tokenInfo);
+			$this->logger->error($errorMsg);
+			throw new \RuntimeException($errorMsg);
 		}
 
 		$order = $this->createOrder($fabricToken, $title, $amount, $merchOrderId);
@@ -503,18 +610,13 @@ class Telebirr
 	 * Builds the complete request object according to Telebirr H5 C2B Web Payment Integration
 	 * Quick Guide (requestCreateOrder). All fields are properly formatted and signed.
 	 *
-	 * @param string      $title        Order title
-	 * @param string|int|float $amount  Total amount (will be formatted to string with 2 decimals)
-	 * @param string|null $merchOrderId Optional merchant order ID; if null, auto-generated
+	 * @param string $title Order title (already validated and sanitized)
+	 * @param string $amount Total amount (already validated and formatted)
+	 * @param string $merchOrderId Merchant order ID (already validated and sanitized)
 	 * @return array Complete signed request object ready for JSON encoding
 	 */
-	private function buildPreOrderRequest(string $title, $amount, ?string $merchOrderId = null): array
+	private function buildPreOrderRequest(string $title, string $amount, string $merchOrderId): array
 	{
-		// API expects total_amount as string with 2 decimals
-		$amountStr = is_numeric($amount)
-			? number_format((float) $amount, 2, '.', '')
-			: (string) $amount;
-
 		$req = [
 			'timestamp' => Signer::createTimeStamp(),
 			'nonce_str' => Signer::createNonceStr(),
@@ -526,10 +628,10 @@ class Telebirr
 			'notify_url'      => $this->config->notifyUrl,
 			'appid'           => $this->config->merchantAppId,
 			'merch_code'      => $this->config->merchantCode,
-			'merch_order_id'  => $merchOrderId !== null && $merchOrderId !== '' ? $merchOrderId : $this->createMerchantOrderId(),
+			'merch_order_id'  => $merchOrderId,
 			'trade_type'      => 'Checkout',
 			'title'           => $title,
-			'total_amount'    => $amountStr,
+			'total_amount'    => $amount,
 			'trans_currency'  => 'ETB',
 			'timeout_express' => '120m',
 		];
@@ -640,19 +742,15 @@ class Telebirr
 	 * Builds the complete request object according to Telebirr H5 C2B Web Payment Integration
 	 * Quick Guide (RefundOrder). All fields are properly formatted and signed.
 	 *
-	 * @param string|int|float $refundAmount  Refund amount (will be formatted to string with 2 decimals)
+	 * @param string $refundAmount Refund amount (already validated and formatted)
 	 * @param string|null $paymentOrderId Optional payment_order_id
-	 * @param string|null $merchOrderId   Optional merchant order ID
-	 * @param string|null $refundReason   Optional refund reason
-	 * @param string|null $refundOrderId  Used for refund_request_no (required by API, auto-generated if null)
+	 * @param string|null $merchOrderId Optional merchant order ID (already validated if provided)
+	 * @param string|null $refundReason Optional refund reason
+	 * @param string|null $refundOrderId Refund request no (already validated if provided)
 	 * @return array Complete signed request object ready for JSON encoding
 	 */
-	private function buildRefundOrderRequest($refundAmount, ?string $paymentOrderId, ?string $merchOrderId, ?string $refundReason, ?string $refundOrderId): array
+	private function buildRefundOrderRequest(string $refundAmount, ?string $paymentOrderId, ?string $merchOrderId, ?string $refundReason, ?string $refundOrderId): array
 	{
-		// API expects refund_amount as string with 2 decimals
-		$refundAmountStr = is_numeric($refundAmount)
-			? number_format((float) $refundAmount, 2, '.', '')
-			: (string) $refundAmount;
 
 		$req = [
 			'timestamp' => Signer::createTimeStamp(),
@@ -662,14 +760,14 @@ class Telebirr
 		];
 
 		// Generate refund_request_no (required) - use provided refundOrderId or auto-generate
-		$refundRequestNo = $refundOrderId !== null && $refundOrderId !== '' 
+		$refundRequestNo = !empty($refundOrderId) 
 			? $refundOrderId 
-			: $this->createMerchantOrderId();
+			: ParameterValidator::generateMerchantOrderId();
 
 		$biz = [
 			'appid'        => $this->config->merchantAppId,
 			'merch_code'   => $this->config->merchantCode,
-			'refund_amount' => $refundAmountStr,
+			'refund_amount' => $refundAmount,
 			'refund_request_no' => $refundRequestNo, // Required parameter
 		];
 
@@ -704,5 +802,197 @@ class Telebirr
 	private function createMerchantOrderId(): string
 	{
 		return (string) (int) (microtime(true) * 1000);
+	}
+
+	/**
+	 * Generate a valid merchant order ID
+	 * 
+	 * Public helper method that generates a merchant order ID matching Telebirr requirements
+	 * (alphanumeric only, no underscores or special characters)
+	 * 
+	 * @return string Generated merchant order ID
+	 */
+	public function generateMerchantOrderId(): string
+	{
+		return ParameterValidator::generateMerchantOrderId();
+	}
+
+	/**
+	 * Sanitize title for Telebirr API
+	 * 
+	 * Removes invalid characters from title per Telebirr requirements
+	 * 
+	 * @param string $title Title to sanitize
+	 * @return string Sanitized title
+	 */
+	public function sanitizeTitle(string $title): string
+	{
+		return ParameterValidator::sanitizeTitle($title);
+	}
+
+	/**
+	 * Format amount to 2 decimal places
+	 * 
+	 * @param string|int|float $amount Amount to format
+	 * @return string Formatted amount with 2 decimal places
+	 * @throws InvalidParameterException if amount is invalid
+	 */
+	public function formatAmount($amount): string
+	{
+		return ParameterValidator::validateAmount($amount);
+	}
+
+	/**
+	 * Validate merchant order ID format
+	 * 
+	 * @param string $merchantOrderId Merchant order ID to check
+	 * @return bool True if valid format
+	 */
+	public function isValidMerchantOrderId(string $merchantOrderId): bool
+	{
+		return ParameterValidator::isValidMerchantOrderId($merchantOrderId);
+	}
+
+	/**
+	 * Log API request
+	 * 
+	 * @param string $method Method name (e.g., 'createOrder')
+	 * @param string $url Request URL
+	 * @param array $data Request data (will be sanitized for logging)
+	 * @return void
+	 */
+	private function logRequest(string $method, string $url, array $data): void
+	{
+		$this->logger->debug('Telebirr API Request', [
+			'method' => $method,
+			'url' => $url,
+			'data' => $this->sanitizeLogData($data)
+		]);
+	}
+
+	/**
+	 * Log API response
+	 * 
+	 * @param string $method Method name
+	 * @param int $httpCode HTTP status code
+	 * @param string $response Response body
+	 * @return void
+	 */
+	private function logResponse(string $method, int $httpCode, string $response): void
+	{
+		$level = ($httpCode >= 200 && $httpCode < 300) ? 'info' : 'error';
+		$this->logger->$level('Telebirr API Response', [
+			'method' => $method,
+			'http_code' => $httpCode,
+			'response' => $response
+		]);
+	}
+
+	/**
+	 * Sanitize data for logging (remove sensitive information)
+	 * 
+	 * @param array $data Data to sanitize
+	 * @return array Sanitized data
+	 */
+	private function sanitizeLogData(array $data): array
+	{
+		$sanitized = $data;
+		
+		// Remove or mask sensitive fields
+		if (isset($sanitized['biz_content'])) {
+			$biz = $sanitized['biz_content'];
+			// Don't log full private key if present
+			if (isset($biz['privateKey'])) {
+				$sanitized['biz_content']['privateKey'] = '[REDACTED]';
+			}
+		}
+		
+		// Don't log full signature
+		if (isset($sanitized['sign'])) {
+			$sanitized['sign'] = substr($sanitized['sign'], 0, 20) . '...';
+		}
+		
+		return $sanitized;
+	}
+
+	/**
+	 * Format API error message with helpful context
+	 * 
+	 * @param string $operation Operation name (e.g., 'Create order')
+	 * @param int $httpCode HTTP status code
+	 * @param string $responseBody Response body
+	 * @return string Formatted error message
+	 */
+	private function formatApiError(string $operation, int $httpCode, string $responseBody): string
+	{
+		$message = "{$operation} API returned HTTP {$httpCode}";
+		
+		// Try to parse error response
+		$errorData = json_decode($responseBody, true);
+		if (is_array($errorData)) {
+			$errorCode = $errorData['errorCode'] ?? $errorData['code'] ?? null;
+			$errorMsg = $errorData['errorMsg'] ?? $errorData['message'] ?? $errorData['msg'] ?? null;
+			$errorSolution = $errorData['errorSolution'] ?? null;
+			
+			if ($errorCode) {
+				$message .= "\nError Code: {$errorCode}";
+			}
+			if ($errorMsg) {
+				$message .= "\nError Message: {$errorMsg}";
+			}
+			if ($errorSolution) {
+				$message .= "\nSolution: {$errorSolution}";
+			}
+			
+			// Add specific help for common error codes
+			if ($errorCode === '49401024995') {
+				$message .= "\n\nThis error indicates a parameter validation issue.";
+				$message .= "\nCommon causes:";
+				$message .= "\n- Invalid merchant order ID format (must be alphanumeric only)";
+				$message .= "\n- Invalid title characters (special characters not allowed)";
+				$message .= "\n- Parameter type mismatch";
+			}
+		} else {
+			$message .= ": {$responseBody}";
+		}
+		
+		return $message;
+	}
+
+	/**
+	 * Format API error response with helpful context
+	 * 
+	 * @param string $operation Operation name
+	 * @param array $result Error response array
+	 * @return string Formatted error message
+	 */
+	private function formatApiErrorResponse(string $operation, array $result): string
+	{
+		$errorCode = $result['code'] ?? $result['errorCode'] ?? 'Unknown';
+		$errorMsg = $result['message'] ?? $result['msg'] ?? $result['errorMsg'] ?? 'Unknown error';
+		$errorSolution = $result['errorSolution'] ?? null;
+		
+		$message = "{$operation} API error (code: {$errorCode}): {$errorMsg}";
+		
+		if ($errorSolution) {
+			$message .= "\nSolution: {$errorSolution}";
+		}
+		
+		// Add specific help for common error codes
+		if ($errorCode === '49401024995') {
+			$message .= "\n\nThis error indicates a parameter validation issue.";
+			$message .= "\nCommon causes:";
+			$message .= "\n- Invalid merchant order ID format (must be alphanumeric only, no underscores)";
+			$message .= "\n- Invalid title characters (special characters like #, !, $, etc. not allowed)";
+			$message .= "\n- Parameter type mismatch";
+			$message .= "\n\nTip: Use ParameterValidator::validateTitle() and ParameterValidator::validateMerchantOrderId() to validate parameters before calling the API.";
+		} elseif ($errorCode === '60320025') {
+			$message .= "\n\nThis error typically indicates:";
+			$message .= "\n- Payment platform unavailable";
+			$message .= "\n- Account permissions issue";
+			$message .= "\n- Environment mismatch (test vs production)";
+		}
+		
+		return $message;
 	}
 }

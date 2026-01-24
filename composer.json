@@ -18,5 +18,8 @@
         "php": ">=7.4.0",
         "ext-curl": "*",
         "ext-openssl": "*"
+    },
+    "suggest": {
+        "psr/log": "For PSR-3 compatible logging (optional)"
     }
 }
