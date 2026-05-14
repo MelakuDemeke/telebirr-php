@@ -22,9 +22,9 @@ class Config
 
     // Telebirr URLs
     private const BASE_URL_TEST = 'https://developerportal.ethiotelebirr.et:38443/apiaccess/payment/gateway';
-    private const BASE_URL_PRODUCTION = 'https://telebirrappcube.ethiomobilemoney.et:38443/apiaccess/payment/gateway';
+    private const BASE_URL_PRODUCTION = 'https://superapp.ethiomobilemoney.et:38443/apiaccess/payment/gateway';
     private const WEB_BASE_URL_TEST = 'https://developerportal.ethiotelebirr.et:38443/payment/web/paygate?';
-    private const WEB_BASE_URL_PRODUCTION = 'https://telebirrappcube.ethiomobilemoney.et:38443/payment/web/paygate?';
+    private const WEB_BASE_URL_PRODUCTION = 'https://superapp.ethiomobilemoney.et:38443/payment/web/paygate?';
 
     public function __construct(array $options)
     {
@@ -146,7 +146,7 @@ class Config
     {
         if (strpos($this->baseUrl, 'developerportal') !== false) {
             return 'test';
-        } elseif (strpos($this->baseUrl, 'telebirrappcube') !== false) {
+        } elseif (strpos($this->baseUrl, 'telebirrappcube') !== false || strpos($this->baseUrl, 'superapp') !== false) {
             return 'production';
         }
 

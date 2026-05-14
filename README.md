@@ -88,6 +88,13 @@ $config = Config::fromEnvironment([...]);
 // Set: export TELEBIRR_ENVIRONMENT=production
 ```
 
+Default endpoints used by the library:
+
+- Test API: https://developerportal.ethiotelebirr.et:38443/apiaccess/payment/gateway
+- Production API: https://superapp.ethiomobilemoney.et:38443/apiaccess/payment/gateway
+- Test Web Checkout Redirect: https://developerportal.ethiotelebirr.et:38443/payment/web/paygate?
+- Production Web Checkout Redirect: https://superapp.ethiomobilemoney.et:38443/payment/web/paygate?
+
 ## 💡 Key Features
 
 - ✅ **Simple API** - One-line checkout URL generation
