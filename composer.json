@@ -1,7 +1,8 @@
 {
     "name": "melaku/telebirr",
-    "description": "a telebirr library for php",
+    "description": "Telebirr Web Checkout PHP library (modern API, C2B Web Checkout).",
     "type": "library",
+    "version": "2.0.3",
     "license": "MIT",
     "autoload": {
         "psr-4": {
@@ -19,6 +20,7 @@
         "ext-curl": "*",
         "ext-json": "*",
         "ext-openssl": "*",
-        "phpseclib/phpseclib": "^3.0"
+        "phpseclib/phpseclib": "^3.0",
+        "psr/log": "^1.1 || ^2.0 || ^3.0"
     }
 }

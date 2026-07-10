@@ -17,6 +17,7 @@ cache/
 *.sublime-workspace
 
 test.php
+test2.php
 
 # OS-generated files
 .DS_Store
@@ -25,3 +26,10 @@ Thumbs.db
 # custom ignores
 /loctest
 /progress.text
+
+# Local credentials & secrets — never commit
+.env
+examples/.env
+*.pem
+*.key
+examples/cacert.pem
