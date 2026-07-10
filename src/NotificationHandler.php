@@ -49,42 +49,40 @@ class NotificationHandler
     }
     
     /**
-     * Send success response to Telebirr
-     * 
-     * Telebirr expects a JSON response acknowledging receipt of the notification.
-     * This method sends the appropriate success response.
-     * 
+     * Build the success acknowledgement for Telebirr.
+     *
+     * Returns a {@see NotificationResponse} value object; it does NOT emit
+     * headers or output. In a framework, turn it into a proper Response so the
+     * response lifecycle is respected (avoiding "headers already sent"). In a
+     * bare PHP endpoint, call `->send()` on the returned object.
+     *
      * @param string|null $message Optional custom message
-     * @return void
      */
-    public static function respondSuccess(?string $message = null): void
+    public static function respondSuccess(?string $message = null): NotificationResponse
     {
-        header('Content-Type: application/json');
         $response = ['success' => true];
         if ($message !== null) {
             $response['message'] = $message;
         }
-        echo json_encode($response);
+
+        return new NotificationResponse(200, (string) json_encode($response));
     }
-    
+
     /**
-     * Send error response to Telebirr
-     * 
-     * Sends an error response indicating that the notification could not be processed.
-     * Telebirr may retry the notification if an error is returned.
-     * 
+     * Build an error acknowledgement for Telebirr.
+     *
+     * Returns a {@see NotificationResponse} value object (no header()/echo).
+     * Telebirr may retry the notification when it receives an error status.
+     *
      * @param string $message Error message
      * @param int $httpCode HTTP status code (default: 500)
-     * @return void
      */
-    public static function respondError(string $message, int $httpCode = 500): void
+    public static function respondError(string $message, int $httpCode = 500): NotificationResponse
     {
-        http_response_code($httpCode);
-        header('Content-Type: application/json');
-        echo json_encode([
+        return new NotificationResponse($httpCode, (string) json_encode([
             'success' => false,
             'message' => $message
-        ]);
+        ]));
     }
     
     /**

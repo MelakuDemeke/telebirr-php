@@ -20,6 +20,12 @@ class Config
     public ?string $redirectUrl;
     public ?string $telebirrPublicKey;
 
+    // HTTP transport settings (applied by the default CurlHttpClient)
+    public bool $verifySsl;
+    public ?string $caBundlePath;
+    public int $timeout;
+    public int $connectTimeout;
+
     // Telebirr URLs
     private const BASE_URL_TEST = 'https://developerportal.ethiotelebirr.et:38443/apiaccess/payment/gateway';
     private const BASE_URL_PRODUCTION = 'https://superapp.ethiomobilemoney.et:38443/apiaccess/payment/gateway';
@@ -53,6 +59,12 @@ class Config
 
         // telebirrPublicKey is optional - used for verifying signatures from return URLs and notifications
         $this->telebirrPublicKey = $options['telebirrPublicKey'] ?? null;
+
+        // TLS is verified by default; only disable it knowingly (never against production).
+        $this->verifySsl      = $options['verifySsl'] ?? true;
+        $this->caBundlePath   = $options['caBundlePath'] ?? null;
+        $this->timeout        = (int) ($options['timeout'] ?? 30);
+        $this->connectTimeout = (int) ($options['connectTimeout'] ?? 10);
     }
 
     /**
@@ -118,23 +130,34 @@ class Config
     {
         // Check for explicit environment setting
         if (!isset($options['environment'])) {
-            // Try TELEBIRR_ENVIRONMENT first
-            $env = getenv('TELEBIRR_ENVIRONMENT');
-
-            // Fall back to APP_ENV
-            if ($env === false) {
-                $env = getenv('APP_ENV');
-            }
-
-            // Default to test if not set
-            if ($env === false) {
-                $env = 'test';
-            }
+            // Read from TELEBIRR_ENVIRONMENT, then APP_ENV. Checks $_ENV/$_SERVER as
+            // well as getenv(), since under php-fpm/Laravel a variable is often only
+            // present in $_ENV or $_SERVER and getenv() alone would miss it.
+            $env = self::readEnv('TELEBIRR_ENVIRONMENT')
+                ?? self::readEnv('APP_ENV')
+                ?? 'test';
 
             $options['environment'] = $env;
         }
 
         return new self($options);
+    }
+
+    /**
+     * Read an environment variable from $_ENV, $_SERVER, or getenv().
+     *
+     * @return string|null The value, or null if the variable is unset/empty.
+     */
+    private static function readEnv(string $name): ?string
+    {
+        foreach ([$_ENV, $_SERVER] as $bag) {
+            if (isset($bag[$name]) && $bag[$name] !== '') {
+                return (string) $bag[$name];
+            }
+        }
+
+        $value = getenv($name);
+        return ($value !== false && $value !== '') ? $value : null;
     }
 
     /**
