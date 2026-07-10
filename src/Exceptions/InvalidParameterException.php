@@ -7,7 +7,7 @@ namespace Melaku\Telebirr\Exceptions;
 /**
  * Exception thrown when a parameter fails validation
  */
-class InvalidParameterException extends \InvalidArgumentException
+class InvalidParameterException extends \InvalidArgumentException implements TelebirrExceptionInterface
 {
     private string $parameterName;
     /** @var mixed */

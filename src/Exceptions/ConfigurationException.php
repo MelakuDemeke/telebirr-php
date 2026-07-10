@@ -7,7 +7,7 @@ namespace Melaku\Telebirr\Exceptions;
 /**
  * Exception thrown when configuration validation fails
  */
-class ConfigurationException extends \InvalidArgumentException
+class ConfigurationException extends \InvalidArgumentException implements TelebirrExceptionInterface
 {
     private array $errors;
 

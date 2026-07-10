@@ -29,19 +29,28 @@ class ParameterValidator
     private const MAX_TITLE_LENGTH = 200;
 
     /**
-     * Validate and sanitize merchant order ID
-     * 
-     * Requirements:
-     * - Must match pattern: ^[A-Za-z0-9]+$ (alphanumeric only, no underscores or special chars)
-     * - If null or empty, generates a new one
-     * - If invalid format, sanitizes by removing invalid characters
-     * 
+     * Validate a merchant order ID.
+     *
+     * CHARSET RULE (enforced at this API boundary): a merchant order id MUST
+     * match ^[A-Za-z0-9]+$ — ASCII letters and digits only, no underscores,
+     * hyphens, dots or any other character. Telebirr strips disallowed
+     * characters on its side, so an id like `AFRO-DOC-1` comes back as
+     * `AFRODOC1` and your lookup silently misses.
+     *
+     * Behaviour:
+     * - null/empty  -> a fresh valid id is generated and returned.
+     * - valid id    -> returned unchanged.
+     * - invalid id  -> throws by default ($autoSanitize = false) so the problem
+     *                  surfaces at integration time. Only pass true if you
+     *                  genuinely want the id rewritten for you — and then you
+     *                  MUST persist the RETURNED value, never the one you passed.
+     *
      * @param string|null $merchantOrderId Merchant order ID to validate
-     * @param bool $autoSanitize If true, automatically sanitizes invalid IDs instead of throwing
-     * @return string Valid merchant order ID
-     * @throws InvalidParameterException if validation fails and autoSanitize is false
+     * @param bool $autoSanitize If true, strip invalid characters instead of throwing (default false)
+     * @return string Valid merchant order ID (may differ from input only when $autoSanitize is true)
+     * @throws InvalidParameterException if the id is invalid and $autoSanitize is false
      */
-    public static function validateMerchantOrderId(?string $merchantOrderId, bool $autoSanitize = true): string
+    public static function validateMerchantOrderId(?string $merchantOrderId, bool $autoSanitize = false): string
     {
         // Generate if empty
         if (empty($merchantOrderId)) {

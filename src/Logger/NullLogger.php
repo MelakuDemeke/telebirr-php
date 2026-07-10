@@ -4,34 +4,14 @@ declare(strict_types=1);
 
 namespace Melaku\Telebirr\Logger;
 
+use Psr\Log\NullLogger as PsrNullLogger;
+
 /**
- * Null logger - does nothing (no-op)
- * Used as default when no logger is provided
+ * No-op logger used as the default when none is injected.
+ *
+ * Kept for backward compatibility; it now simply extends {@see \Psr\Log\NullLogger}.
+ * New code can inject any PSR-3 logger (Monolog, Laravel's, etc.) directly.
  */
-class NullLogger implements LoggerInterface
+class NullLogger extends PsrNullLogger
 {
-    public function log(string $level, string $message, array $context = []): void
-    {
-        // No-op
-    }
-
-    public function debug(string $message, array $context = []): void
-    {
-        // No-op
-    }
-
-    public function info(string $message, array $context = []): void
-    {
-        // No-op
-    }
-
-    public function warning(string $message, array $context = []): void
-    {
-        // No-op
-    }
-
-    public function error(string $message, array $context = []): void
-    {
-        // No-op
-    }
 }

@@ -49,15 +49,25 @@ $config = Config::forTest([
 
 $client = new Telebirr($config);
 
-// Create checkout URL (one line!)
-$checkoutUrl = $client->createCheckoutUrl('Order #123', '100.00');
+// Create checkout URL (one line!). Returns a CheckoutResult.
+$result = $client->createCheckoutUrl('Order 123', '100.00');
+
+// IMPORTANT: persist the EXACT merch_order_id the library used — Telebirr
+// echoes this value back in notifications and on the return URL. Storing a
+// different value (e.g. one you thought you passed) can cause lookup misses.
+saveOrder($result->getMerchOrderId(), $result->getPrepayId()); // your code
 
 // Redirect customer to Telebirr
-header('Location: ' . $checkoutUrl);
+header('Location: ' . $result->getCheckoutUrl());
 exit;
 ```
 
 That's it! The library handles token management, order creation, and checkout URL generation automatically.
+
+> **Merchant order id charset:** a merch_order_id must match `^[A-Za-z0-9]+$`
+> (ASCII letters and digits only — no `-`, `_`, `.` or spaces). Invalid ids now
+> throw an `InvalidParameterException` instead of being silently rewritten. Pass
+> `null` to have a valid id generated for you, and read it back from the result.
 
 ## 📋 Configuration
 
@@ -112,16 +122,23 @@ Default endpoints used by the library:
 use Melaku\Telebirr\ReturnUrlHandler;
 
 try {
+    // Fails closed: throws if the signature is missing or invalid.
     $paymentData = ReturnUrlHandler::handle($_GET, $config);
-    
+
     if ($paymentData['isSuccess']) {
-        // Payment successful
         $orderId = $paymentData['merchantOrderId'];
-        $amount = $paymentData['amount'];
-        // Update your database, fulfill order, etc.
+
+        // The return URL comes through the user's browser and is spoofable even
+        // when signed. For anything that fulfils an order, confirm the real
+        // status server-to-server before acting on it:
+        $tokenInfo = $client->applyFabricToken();
+        $status = $client->queryOrder($tokenInfo['token'], null, $orderId);
+        $confirmed = ($status['biz_content']['trade_status'] ?? '') ;
+
+        // Update your database / fulfill order only after this confirmation.
     }
 } catch (\RuntimeException $e) {
-    // Signature verification failed
+    // Missing/invalid signature
     http_response_code(400);
     echo "Invalid payment data";
 }
@@ -137,7 +154,9 @@ $notification = NotificationHandler::parse($rawData);
 
 // Verify signature
 if (!NotificationHandler::verify($notification, $config)) {
-    NotificationHandler::respondError('Invalid signature');
+    // respond* now RETURN a NotificationResponse (no header()/echo). In a
+    // framework, convert it to your Response object. In bare PHP, call send().
+    NotificationHandler::respondError('Invalid signature')->send();
     exit;
 }
 
@@ -145,10 +164,13 @@ if (!NotificationHandler::verify($notification, $config)) {
 if (NotificationHandler::isPaymentSuccessful($notification)) {
     $paymentInfo = NotificationHandler::extractPaymentInfo($notification);
     // Update database, fulfill order, etc.
-    
-    NotificationHandler::respondSuccess('Payment processed');
+
+    NotificationHandler::respondSuccess('Payment processed')->send();
 }
 ```
+
+> **Framework usage:** instead of `->send()`, build a native response, e.g. in
+> Laravel: `return response(json: $resp->getBody(), status: $resp->getStatusCode());`
 
 ### Query Order Status
 
@@ -179,8 +201,61 @@ $refundResult = $client->refundOrder(
 
 - PHP >= 7.4
 - `ext-curl` extension
-- `ext-openssl` extension (used by `notify.php` for payload decryption only)
+- `ext-openssl` extension (used by the legacy `Notify` class for payload decryption only)
 - **phpseclib/phpseclib** (^3.0) — **Signer** and **SignatureVerifier** use phpseclib only (pure-PHP). No OpenSSL CLI or ext-openssl required for signing/verification. Works on all platforms including Windows. Algorithm: RSA-PSS, SHA256, MGF1-SHA256, salt length 32.
+- **psr/log** (^1.1 || ^2.0 || ^3.0) — the library type-hints the standard `Psr\Log\LoggerInterface`, so any PSR-3 logger (Monolog, Laravel's logger, …) drops straight in.
+
+## ⚙️ Advanced Configuration
+
+### TLS & timeouts
+
+The default HTTP client verifies the gateway's TLS certificate and applies
+timeouts (a payment gateway must not be called over an unverified or unbounded
+connection). Override only if you must:
+
+```php
+$config = Config::forProduction([
+    // ... credentials ...
+    'verifySsl'      => true,   // default true — leave on in production
+    'caBundlePath'   => null,   // optional path to a custom CA bundle (PEM)
+    'timeout'        => 30,     // total request timeout (seconds)
+    'connectTimeout' => 10,     // connection timeout (seconds)
+]);
+```
+
+### PSR-3 logging
+
+```php
+use Monolog\Logger;
+
+$log = new Logger('telebirr');
+$client = new Telebirr($config, $log); // request/response logging (secrets & PII redacted)
+```
+
+### Injecting a custom HTTP client (testing)
+
+The third constructor argument accepts any `Melaku\Telebirr\Http\HttpClientInterface`,
+so you can unit-test without hitting the network:
+
+```php
+use Melaku\Telebirr\Http\HttpClientInterface;
+use Melaku\Telebirr\Http\HttpResponse;
+
+$fake = new class implements HttpClientInterface {
+    public function post(string $url, array $headers, string $body): HttpResponse {
+        return new HttpResponse(200, '{"token":"Bearer TEST"}');
+    }
+};
+
+$client = new Telebirr($config, null, $fake);
+```
+
+### Catching errors
+
+Every exception the library throws implements
+`Melaku\Telebirr\Exceptions\TelebirrExceptionInterface`, so you can catch them
+all in one place. API failures throw `ApiException`, which exposes
+`getHttpStatus()`, `getErrorCode()` and `getResponseBody()`.
 
 ## 📚 Documentation
 
