@@ -1,3 +1,10 @@
 /vendor/
 test.php
 test2.php
+
+# Local credentials & secrets — never commit
+.env
+examples/.env
+*.pem
+*.key
+examples/cacert.pem
