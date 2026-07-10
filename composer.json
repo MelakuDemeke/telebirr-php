@@ -2,6 +2,7 @@
     "name": "melaku/telebirr",
     "description": "Telebirr Web Checkout PHP library (modern API, C2B Web Checkout).",
     "type": "library",
+    "version": "2.0.3",
     "license": "MIT",
     "autoload": {
         "psr-4": {

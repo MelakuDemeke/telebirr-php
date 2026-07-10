@@ -221,7 +221,7 @@ class Telebirr
 	 */
 	public function refundOrder(string $fabricToken, $refundAmount, ?string $paymentOrderId = null, ?string $merchOrderId = null, ?string $refundReason = null, ?string $refundOrderId = null): array
 	{
-		if (empty($paymentOrderId) && empty($merchOrderId)) {
+		if (($paymentOrderId === null || $paymentOrderId === '') && ($merchOrderId === null || $merchOrderId === '')) {
 			throw new InvalidParameterException(
 				'paymentOrderId|merchOrderId',
 				null,

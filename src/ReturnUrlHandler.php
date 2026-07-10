@@ -2,6 +2,8 @@
 
 namespace Melaku\Telebirr;
 
+use Melaku\Telebirr\Exceptions\TelebirrException;
+
 /**
  * Return URL Handler
  * 
@@ -37,20 +39,20 @@ class ReturnUrlHandler
      *   - isSuccess: Boolean indicating if payment was successful
      *   - timestamp: Transaction end time
      *   - raw: All original parameters
-     * @throws \RuntimeException if the signature is missing or invalid
+     * @throws TelebirrException if the signature is missing or invalid
      */
     public static function handle(array $params, Config $config): array
     {
         // Verification is mandatory — an unsigned return must never be trusted.
         if (empty($params['sign'])) {
-            throw new \RuntimeException(
+            throw new TelebirrException(
                 'Missing signature on return URL - refusing to trust unsigned payment data. '
                 . 'Confirm the order server-to-server via Telebirr::queryOrder().'
             );
         }
 
         if (!SignatureVerifier::verify($params, $config)) {
-            throw new \RuntimeException('Invalid signature - payment data may be tampered with');
+            throw new TelebirrException('Invalid signature - payment data may be tampered with');
         }
 
         // Parse and normalize parameters
