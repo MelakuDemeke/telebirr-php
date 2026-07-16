@@ -17,31 +17,104 @@ use Melaku\Telebirr\Exceptions\InvalidParameterException;
  */
 class Telebirr
 {
+	/** Refresh the cached fabric token this many seconds before its reported expiry. */
+	private const TOKEN_EXPIRY_SAFETY_MARGIN = 60;
+
+	/** Cache TTL (seconds) when the token response carries no parseable expirationDate. */
+	private const TOKEN_FALLBACK_TTL = 300;
+
 	private Config $config;
 	private Signer $signer;
 	private LoggerInterface $logger;
 	private HttpClientInterface $httpClient;
 
 	/**
+	 * Client behavior options:
+	 * - 'retry' => ['retries' => int, 'delayMs' => int, 'maxDelayMs' => int]
+	 *   Opt-in retry with exponential backoff on transient failures (Telebirr
+	 *   infra codes like 49401024991, HTTP 502/503/504, transport timeouts).
+	 *   Default: no retry.
+	 * - 'cacheFabricToken' => bool  Cache the fabric token until expirationDate
+	 *   (minus a safety margin) within this instance. Default true. Note PHP's
+	 *   request lifecycle: the cache lives for the current request only — it
+	 *   helps when one request performs several gateway calls (e.g. a settle
+	 *   path), not across requests.
+	 */
+	private array $options;
+
+	/** @var array{token: string, expiresAt: int}|null */
+	private ?array $tokenCache = null;
+
+	/**
 	 * @param Config                    $config
 	 * @param LoggerInterface|null      $logger     Any PSR-3 logger (Monolog, Laravel, ...). Defaults to a no-op.
 	 * @param HttpClientInterface|null  $httpClient Injectable HTTP client. Defaults to a cURL client that
 	 *                                              verifies TLS and applies timeouts using the Config settings.
+	 * @param array|null                $options    Client behavior: opt-in transient-error retry, token caching.
 	 */
 	public function __construct(
 		Config $config,
 		?LoggerInterface $logger = null,
-		?HttpClientInterface $httpClient = null
+		?HttpClientInterface $httpClient = null,
+		?array $options = null
 	) {
 		$this->config = $config;
 		$this->signer = new Signer($config);
 		$this->logger = $logger ?? new NullLogger();
+		$this->options = $options ?? [];
 		$this->httpClient = $httpClient ?? new CurlHttpClient(
 			$config->verifySsl,
 			$config->caBundlePath,
 			$config->timeout,
 			$config->connectTimeout
 		);
+
+		$this->warnOnRiskyConfig();
+	}
+
+	/**
+	 * Surface configuration footguns loudly at construction time.
+	 */
+	private function warnOnRiskyConfig(): void
+	{
+		if (!$this->config->verifySsl) {
+			if ($this->config->isProduction()) {
+				$this->logger->error(
+					'verifySsl=false is set against the PRODUCTION gateway — TLS verification is disabled '
+					. 'for a payment gateway. Remove verifySsl=false: this library bundles the Telebirr CA, '
+					. 'so verification works without it.'
+				);
+			} else {
+				$this->logger->warning(
+					'verifySsl=false — TLS verification is disabled. Acceptable only against the TEST gateway, never in production.'
+				);
+			}
+		}
+
+		$host = parse_url($this->config->notifyUrl, PHP_URL_HOST);
+		$scheme = parse_url($this->config->notifyUrl, PHP_URL_SCHEME);
+		if (is_string($host)) {
+			$isUnreachable = $host === 'localhost'
+				|| $host === '::1'
+				|| preg_match('/^127\./', $host) === 1
+				|| preg_match('/^10\./', $host) === 1
+				|| preg_match('/^192\.168\./', $host) === 1
+				|| preg_match('/^172\.(1[6-9]|2\d|3[01])\./', $host) === 1
+				|| substr($host, -6) === '.local'
+				|| substr($host, -9) === '.internal';
+			if ($isUnreachable) {
+				$this->logger->warning(
+					"notifyUrl '{$this->config->notifyUrl}' points at localhost/a private address — Telebirr's "
+					. 'servers cannot reach it, so the server-to-server payment notification will never arrive. '
+					. 'Use a publicly reachable URL (in development, a tunnel such as ngrok or cloudflared).'
+				);
+			} elseif ($scheme === 'http') {
+				$this->logger->warning(
+					"notifyUrl '{$this->config->notifyUrl}' uses plain http:// — use https:// so payment "
+					. 'notifications cannot be intercepted.'
+				);
+			}
+		}
 	}
 
 	/**
@@ -59,6 +132,10 @@ class Telebirr
 	 * - Headers: Content-Type: application/json, X-APP-Key: {fabricAppId}
 	 * - Body: { "appSecret": "{appSecret}" }
 	 * - Response: { "token": "Bearer xxx", "effectiveDate": "...", "expirationDate": "..." }
+	 *
+	 * Always performs a network call. The high-level helpers
+	 * (createCheckoutUrl, getOrderStatus) reuse a cached token until its
+	 * expiry instead — see the 'cacheFabricToken' constructor option.
 	 *
 	 * @return array { token, effectiveDate, expirationDate, ... }
 	 * @throws ApiException on API errors or invalid responses
@@ -85,7 +162,60 @@ class Telebirr
 			);
 		}
 
+		if (($this->options['cacheFabricToken'] ?? true) !== false) {
+			$expiresAt = self::parseExpiryTimestamp($result['expirationDate'] ?? null);
+			$this->tokenCache = [
+				'token'     => (string) $result['token'],
+				'expiresAt' => $expiresAt !== null
+					? $expiresAt - self::TOKEN_EXPIRY_SAFETY_MARGIN
+					: time() + self::TOKEN_FALLBACK_TTL,
+			];
+		}
+
 		return $result;
+	}
+
+	/**
+	 * Cached fabric token when still valid; otherwise fetch (and cache) a fresh one.
+	 */
+	private function getFabricToken(): string
+	{
+		if (
+			($this->options['cacheFabricToken'] ?? true) !== false
+			&& $this->tokenCache !== null
+			&& time() < $this->tokenCache['expiresAt']
+		) {
+			return $this->tokenCache['token'];
+		}
+
+		$tokenInfo = $this->applyFabricToken();
+		return (string) $tokenInfo['token'];
+	}
+
+	/**
+	 * Parse Telebirr's expirationDate (epoch seconds/millis, numeric string,
+	 * or date string) to an epoch-seconds timestamp.
+	 *
+	 * @param mixed $value
+	 */
+	private static function parseExpiryTimestamp($value): ?int
+	{
+		if (is_int($value) || is_float($value)) {
+			$numeric = (float) $value;
+			return $numeric > 1e12 ? (int) ($numeric / 1000) : (int) $numeric;
+		}
+		if (is_string($value) && trim($value) !== '') {
+			$trimmed = trim($value);
+			if (preg_match('/^\d+$/', $trimmed) === 1) {
+				$numeric = (float) $trimmed;
+				return $numeric > 1e12 ? (int) ($numeric / 1000) : (int) $numeric;
+			}
+			$parsed = strtotime($trimmed);
+			if ($parsed !== false) {
+				return $parsed;
+			}
+		}
+		return null;
 	}
 
 	/**
@@ -347,14 +477,7 @@ class Telebirr
 		// report back the EXACT value Telebirr will use.
 		$merchOrderId = ParameterValidator::validateMerchantOrderId($merchOrderId, false);
 
-		$tokenInfo   = $this->applyFabricToken();
-		$fabricToken = $tokenInfo['token'] ?? null;
-		if (!$fabricToken) {
-			$errorMsg = 'Fabric token missing in token response: ' . json_encode($tokenInfo);
-			$this->logger->error($errorMsg);
-			throw new ApiException($errorMsg, 200, null, json_encode($tokenInfo));
-		}
-
+		$fabricToken = $this->getFabricToken();
 		$order = $this->createOrder($fabricToken, $title, $amount, $merchOrderId);
 		$prepayId = $order['biz_content']['prepay_id'];
 		$checkoutUrl = $this->buildCheckoutUrl($prepayId);
@@ -363,7 +486,114 @@ class Telebirr
 	}
 
 	/**
-	 * Shared request pipeline: sign is already applied to $reqObject by the caller's builder.
+	 * High-level helper: confirm an order's real status server-to-server.
+	 * Symmetric counterpart to createCheckoutUrl() — token management (with
+	 * caching) and response mapping are handled for you.
+	 *
+	 * This is what your notify endpoint AND your return-URL handler should
+	 * call before granting anything: never trust the spoofable browser
+	 * redirect, and verify OrderStatus::$amount against your own order before
+	 * fulfilling.
+	 *
+	 * @param string|null $merchOrderId Your merchant order id (from CheckoutResult::getMerchOrderId()).
+	 * @param string|null $prepayId Optional alternative lookup key; at least one of the two is required.
+	 * @throws ApiException on API errors
+	 * @throws InvalidParameterException if neither id is provided
+	 */
+	public function getOrderStatus(?string $merchOrderId = null, ?string $prepayId = null): OrderStatus
+	{
+		$fabricToken = $this->getFabricToken();
+		$result = $this->queryOrder($fabricToken, $prepayId, $merchOrderId);
+
+		$biz = (isset($result['biz_content']) && is_array($result['biz_content'])) ? $result['biz_content'] : [];
+
+		// Defensive casing fallbacks: the gateway documents snake_case but has
+		// been observed returning camelCase variants on some deployments.
+		$pick = static function (array $keys) use ($biz): string {
+			foreach ($keys as $key) {
+				if (isset($biz[$key]) && $biz[$key] !== '' && $biz[$key] !== null) {
+					return (string) $biz[$key];
+				}
+			}
+			return '';
+		};
+
+		$tradeStatus = $pick(['trade_status', 'tradeStatus']);
+		$paymentOrderId = $pick(['payment_order_id', 'paymentOrderId']);
+		$transEndTime = $pick(['trans_end_time', 'transEndTime']);
+		$currency = $pick(['trans_currency', 'transCurrency']);
+
+		return new OrderStatus(
+			$tradeStatus !== '' && PaymentStatus::isSuccess($tradeStatus),
+			$tradeStatus !== '' && PaymentStatus::isFailure($tradeStatus),
+			$tradeStatus !== '' && PaymentStatus::isCancelled($tradeStatus),
+			$tradeStatus,
+			$pick(['total_amount', 'totalAmount']),
+			$currency !== '' ? $currency : 'ETB',
+			$paymentOrderId !== '' ? $paymentOrderId : null,
+			$pick(['merch_order_id', 'merchOrderId']) !== '' ? $pick(['merch_order_id', 'merchOrderId']) : (string) $merchOrderId,
+			$transEndTime !== '' ? $transEndTime : null,
+			$result
+		);
+	}
+
+	/**
+	 * Probe gateway availability by requesting a fabric token (the cheapest
+	 * authenticated call). Useful before a user-facing checkout, given how
+	 * flaky the sandbox can be. Never throws.
+	 *
+	 * @return array{ok: bool, latencyMs: int, error: ?string}
+	 */
+	public function ping(): array
+	{
+		$start = microtime(true);
+		try {
+			$this->applyFabricToken();
+			return ['ok' => true, 'latencyMs' => (int) round((microtime(true) - $start) * 1000), 'error' => null];
+		} catch (\Throwable $e) {
+			return ['ok' => false, 'latencyMs' => (int) round((microtime(true) - $start) * 1000), 'error' => $e->getMessage()];
+		}
+	}
+
+	/**
+	 * Shared request pipeline with opt-in retry: transient failures (see
+	 * ApiException::isTransient()) are retried with exponential backoff when
+	 * options['retry']['retries'] > 0; everything else fails immediately.
+	 *
+	 * @throws ApiException on transport failure, non-2xx status, invalid JSON, or API error code.
+	 */
+	private function sendApiRequest(
+		string $operation,
+		string $url,
+		array $reqObject,
+		?string $fabricToken = null,
+		bool $checkApiCode = true
+	): array {
+		$retrySettings = $this->options['retry'] ?? [];
+		$retries = max(0, (int) ($retrySettings['retries'] ?? 0));
+		$baseDelayMs = (int) ($retrySettings['delayMs'] ?? 500);
+		$maxDelayMs = (int) ($retrySettings['maxDelayMs'] ?? 5000);
+
+		for ($attempt = 0; ; $attempt++) {
+			try {
+				return $this->sendApiRequestOnce($operation, $url, $reqObject, $fabricToken, $checkApiCode);
+			} catch (ApiException $e) {
+				if ($attempt < $retries && $e->isTransient()) {
+					$delayMs = (int) min($baseDelayMs * (2 ** $attempt), $maxDelayMs);
+					$this->logger->warning(
+						"Transient {$operation} failure (attempt " . ($attempt + 1) . '/' . ($retries + 1) . "), retrying in {$delayMs}ms",
+						['telebirr_code' => $e->getTelebirrCode(), 'http_status' => $e->getHttpStatus()]
+					);
+					usleep($delayMs * 1000);
+					continue;
+				}
+				throw $e;
+			}
+		}
+	}
+
+	/**
+	 * One request attempt: sign is already applied to $reqObject by the caller's builder.
 	 * Handles transport, HTTP status, JSON decoding and API-level error detection.
 	 *
 	 * @param string      $operation   Human label used in logs/errors (e.g. 'createOrder').
@@ -374,7 +604,7 @@ class Telebirr
 	 * @return array Decoded response body.
 	 * @throws ApiException on transport failure, non-2xx status, invalid JSON, or API error code.
 	 */
-	private function sendApiRequest(
+	private function sendApiRequestOnce(
 		string $operation,
 		string $url,
 		array $reqObject,
@@ -405,6 +635,10 @@ class Telebirr
 		$this->logResponse($operation, $httpCode, $responseBody);
 
 		if ($httpCode < 200 || $httpCode >= 300) {
+			if ($httpCode === 401) {
+				// Token was rejected — drop the cache so the next call fetches fresh.
+				$this->tokenCache = null;
+			}
 			$errorMsg = $this->formatApiError($operation, $httpCode, $responseBody);
 			$this->logger->error($errorMsg, ['http_code' => $httpCode]);
 			throw new ApiException($errorMsg, $httpCode, null, $responseBody);

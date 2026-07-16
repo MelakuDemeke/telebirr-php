@@ -47,10 +47,17 @@ class Config
         $this->appSecret     = $options['appSecret'];
         $this->merchantAppId = $options['merchantAppId'];
         $this->merchantCode  = $options['merchantCode'];
-        $this->privateKey    = $options['privateKey'];
+        // Ethio Telecom issues keys as bare base64 DER; accept that (or PEM,
+        // including PEM with literal `\n` from env files) and normalize to PEM.
+        $this->privateKey = $options['privateKey'] !== ''
+            ? KeyNormalizer::normalizePrivateKey($options['privateKey'])
+            : $options['privateKey'];
 
         if (empty($options['notifyUrl'])) {
-            throw new \InvalidArgumentException('notifyUrl is required. This is where Telebirr will send payment status updates.');
+            throw new \InvalidArgumentException(
+                'notifyUrl is required. This is where Telebirr will send payment status updates. '
+                . '(Pass it in options, or set TELEBIRR_NOTIFY_URL when using Config::fromEnvironment.)'
+            );
         }
         $this->notifyUrl = $options['notifyUrl'];
 
@@ -58,7 +65,10 @@ class Config
         $this->redirectUrl = $options['redirectUrl'] ?? null;
 
         // telebirrPublicKey is optional - used for verifying signatures from return URLs and notifications
-        $this->telebirrPublicKey = $options['telebirrPublicKey'] ?? null;
+        $telebirrPublicKey = $options['telebirrPublicKey'] ?? null;
+        $this->telebirrPublicKey = ($telebirrPublicKey !== null && $telebirrPublicKey !== '')
+            ? KeyNormalizer::normalizePublicKey($telebirrPublicKey)
+            : null;
 
         // TLS is verified by default; only disable it knowingly (never against production).
         $this->verifySsl      = $options['verifySsl'] ?? true;
@@ -116,28 +126,52 @@ class Config
     }
 
     /**
-     * Create config with automatic environment detection
-     * 
-     * Detects environment from:
-     * 1. TELEBIRR_ENVIRONMENT environment variable
-     * 2. APP_ENV environment variable
-     * 3. Defaults to 'test' if not set
+     * Create config from environment variables, with any explicit option
+     * overriding its variable. Enables zero-argument setup:
      *
-     * @param array $options Configuration options
+     * - TELEBIRR_ENVIRONMENT (then APP_ENV, default 'test')
+     * - TELEBIRR_FABRIC_APP_ID, TELEBIRR_APP_SECRET
+     * - TELEBIRR_MERCHANT_APP_ID, TELEBIRR_MERCHANT_CODE
+     * - TELEBIRR_PRIVATE_KEY (PEM or bare base64 — both accepted)
+     * - TELEBIRR_NOTIFY_URL, TELEBIRR_REDIRECT_URL, TELEBIRR_PUBLIC_KEY
+     *
+     * Reads $_ENV/$_SERVER as well as getenv(), since under php-fpm/Laravel a
+     * variable is often only present in $_ENV or $_SERVER.
+     *
+     * @param array $options Configuration options (each overrides its env var)
      * @return self
      */
-    public static function fromEnvironment(array $options): self
+    public static function fromEnvironment(array $options = []): self
     {
-        // Check for explicit environment setting
         if (!isset($options['environment'])) {
-            // Read from TELEBIRR_ENVIRONMENT, then APP_ENV. Checks $_ENV/$_SERVER as
-            // well as getenv(), since under php-fpm/Laravel a variable is often only
-            // present in $_ENV or $_SERVER and getenv() alone would miss it.
-            $env = self::readEnv('TELEBIRR_ENVIRONMENT')
+            $options['environment'] = self::readEnv('TELEBIRR_ENVIRONMENT')
                 ?? self::readEnv('APP_ENV')
                 ?? 'test';
+        }
 
-            $options['environment'] = $env;
+        $envMap = [
+            'fabricAppId'       => 'TELEBIRR_FABRIC_APP_ID',
+            'appSecret'         => 'TELEBIRR_APP_SECRET',
+            'merchantAppId'     => 'TELEBIRR_MERCHANT_APP_ID',
+            'merchantCode'      => 'TELEBIRR_MERCHANT_CODE',
+            'privateKey'        => 'TELEBIRR_PRIVATE_KEY',
+            'notifyUrl'         => 'TELEBIRR_NOTIFY_URL',
+            'redirectUrl'       => 'TELEBIRR_REDIRECT_URL',
+            'telebirrPublicKey' => 'TELEBIRR_PUBLIC_KEY',
+        ];
+        foreach ($envMap as $option => $envVar) {
+            if (!isset($options[$option])) {
+                $value = self::readEnv($envVar);
+                if ($value !== null) {
+                    $options[$option] = $value;
+                }
+            }
+        }
+
+        // Required string options default to '' so validate() reports them
+        // instead of the constructor emitting undefined-index errors.
+        foreach (['fabricAppId', 'appSecret', 'merchantAppId', 'merchantCode', 'privateKey'] as $required) {
+            $options[$required] = $options[$required] ?? '';
         }
 
         return new self($options);
@@ -230,13 +264,17 @@ class Config
             $errors[] = "notifyUrl is required";
         }
 
-        // Validate private key format
+        // Validate private key format (keys are normalized to PEM by the
+        // constructor, so both PKCS#8 and PKCS#1 headers are acceptable here)
         if (!empty($this->privateKey)) {
-            if (!preg_match('/-----BEGIN PRIVATE KEY-----/', $this->privateKey)) {
-                $errors[] = "privateKey must be in PEM format (should start with '-----BEGIN PRIVATE KEY-----')";
-            }
-            if (!preg_match('/-----END PRIVATE KEY-----/', $this->privateKey)) {
-                $errors[] = "privateKey must be in PEM format (should end with '-----END PRIVATE KEY-----')";
+            $hasPkcs8 = strpos($this->privateKey, '-----BEGIN PRIVATE KEY-----') !== false
+                && strpos($this->privateKey, '-----END PRIVATE KEY-----') !== false;
+            $hasPkcs1 = strpos($this->privateKey, '-----BEGIN RSA PRIVATE KEY-----') !== false
+                && strpos($this->privateKey, '-----END RSA PRIVATE KEY-----') !== false;
+            if (!$hasPkcs8 && !$hasPkcs1) {
+                $errors[] = "privateKey must be in PEM format ('-----BEGIN PRIVATE KEY-----' or "
+                    . "'-----BEGIN RSA PRIVATE KEY-----') or bare base64 DER as issued by "
+                    . "Ethio Telecom (which is normalized automatically)";
             }
         }
 

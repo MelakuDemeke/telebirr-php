@@ -96,9 +96,17 @@ You'll receive these from Telebirr:
 - `appSecret` - Your App Secret
 - `merchantAppId` - Your Merchant App ID
 - `merchantCode` - Your Merchant Code (6-digit)
-- `privateKey` - Your RSA Private Key (PEM format)
+- `privateKey` - Your RSA Private Key
 - `notifyUrl` - Server-to-server notification URL (required)
 - `redirectUrl` - User return URL after payment (optional)
+
+### Key formats — bare base64 is fine
+
+Ethio Telecom issues merchant keys as **bare base64 DER** (a single long
+`MIIEvgIBADANBgk…` line, no `-----BEGIN…-----` armor). Pass it exactly as
+issued — the library normalizes it to PEM automatically, picking the right
+header (PKCS#8 vs PKCS#1) for you. Proper PEM works too, including PEM whose
+newlines were flattened to literal `\n` by a `.env` file.
 
 ### Environment Setup
 
@@ -111,10 +119,25 @@ $config = Config::forTest([...]);
 // Production
 $config = Config::forProduction([...]);
 
-// Auto-detect from environment variable
-$config = Config::fromEnvironment([...]);
-// Set: export TELEBIRR_ENVIRONMENT=production
+// Zero-config: read everything from environment variables
+$config = Config::fromEnvironment();
 ```
+
+`Config::fromEnvironment()` reads (any explicit option overrides its variable;
+`$_ENV`, `$_SERVER`, and `getenv()` are all checked, so it works under
+php-fpm/Laravel too):
+
+| Variable | Maps to |
+|---|---|
+| `TELEBIRR_ENVIRONMENT` (then `APP_ENV`) | `environment` |
+| `TELEBIRR_FABRIC_APP_ID` | `fabricAppId` |
+| `TELEBIRR_APP_SECRET` | `appSecret` |
+| `TELEBIRR_MERCHANT_APP_ID` | `merchantAppId` |
+| `TELEBIRR_MERCHANT_CODE` | `merchantCode` |
+| `TELEBIRR_PRIVATE_KEY` | `privateKey` (PEM or bare base64) |
+| `TELEBIRR_NOTIFY_URL` | `notifyUrl` |
+| `TELEBIRR_REDIRECT_URL` | `redirectUrl` |
+| `TELEBIRR_PUBLIC_KEY` | `telebirrPublicKey` |
 
 Default endpoints used by the library:
 
@@ -125,14 +148,34 @@ Default endpoints used by the library:
 
 ## 💡 Key Features
 
-- ✅ **Simple API** - One-line checkout URL generation
-- ✅ **Automatic Token Management** - No need to handle tokens manually
+- ✅ **Simple API** - One-call checkout (`createCheckoutUrl`) and one-call verification (`getOrderStatus`)
+- ✅ **Automatic Token Management** - Fabric tokens are fetched, cached until expiry, and refreshed for you
+- ✅ **Key normalization** - Bare base64 keys (as Ethio Telecom issues them) or PEM, both just work
+- ✅ **TLS that just works** - Falls back to a bundled Telebirr CA chain when the test gateway's incomplete chain fails the system store; no `verifySsl => false` needed
+- ✅ **Structured errors + opt-in retry** - Branch on `$e->getTelebirrCode()`; retry transient sandbox errors with backoff
 - ✅ **Signature Verification** - Built-in helpers for return URLs and notifications
 - ✅ **Helper Classes** - `ReturnUrlHandler`, `NotificationHandler`, `PaymentStatus`
 - ✅ **Environment Support** - Automatic test/production URL handling
 - ✅ **Full Compliance** - Follows Telebirr H5 C2B Web Payment Integration spec
 
 ## 📖 Common Use Cases
+
+### Verify a payment (`getOrderStatus`)
+
+The one-call, server-to-server way to confirm what actually happened to an
+order — the verification counterpart to `createCheckoutUrl`. Token handling
+and response mapping are done for you:
+
+```php
+$status = $client->getOrderStatus('YOUR_MERCH_ORDER_ID');
+
+$status->paid;           // bool — true ONLY on an explicit success status (fails closed)
+$status->tradeStatus;    // e.g. 'PAY_SUCCESS'
+$status->amount;         // e.g. '100.00' — VERIFY this against your own order amount
+$status->currency;       // 'ETB'
+$status->paymentOrderId; // Telebirr's transaction reference (or null)
+$status->raw;            // the full queryOrder response if you need more
+```
 
 ### Handle Payment Return
 
@@ -144,16 +187,13 @@ try {
     $paymentData = ReturnUrlHandler::handle($_GET, $config);
 
     if ($paymentData['isSuccess']) {
-        $orderId = $paymentData['merchantOrderId'];
-
         // The return URL comes through the user's browser and is spoofable even
         // when signed. For anything that fulfils an order, confirm the real
         // status server-to-server before acting on it:
-        $tokenInfo = $client->applyFabricToken();
-        $status = $client->queryOrder($tokenInfo['token'], null, $orderId);
-        $confirmed = ($status['biz_content']['trade_status'] ?? '') ;
-
-        // Update your database / fulfill order only after this confirmation.
+        $status = $client->getOrderStatus($paymentData['merchantOrderId']);
+        if ($status->paid && $status->amount === $expectedAmount) {
+            // Update your database / fulfill the order — idempotently (see below).
+        }
     }
 } catch (\RuntimeException $e) {
     // Missing/invalid signature
@@ -161,6 +201,72 @@ try {
     echo "Invalid payment data";
 }
 ```
+
+#### Return-URL parameters (the raw contract)
+
+Telebirr redirects the user's browser to your `redirectUrl` with these query
+parameters appended (snake_case):
+
+| Parameter | Meaning |
+|---|---|
+| `merch_order_id` | Your merchant order id, echoed back verbatim |
+| `payment_order_id` | Telebirr's transaction reference |
+| `trade_status` | e.g. `PAY_SUCCESS`, `PAY_FAILED`, `PAY_CANCEL` |
+| `total_amount` | Order amount |
+| `trans_currency` | Currency (`ETB`) |
+| `trans_end_time` | Transaction end time |
+| `sign`, `sign_type` | RSA-PSS signature over the other params |
+
+`ReturnUrlHandler::handle()` verifies the signature and maps these for you —
+the table is here for when you're debugging the raw redirect.
+
+### The idempotent settlement pattern (recommended)
+
+The browser return and the server notification **race** — either can arrive
+first, both can arrive, and neither should be trusted on its own. The
+production-correct shape:
+
+1. On checkout, store a row keyed by `merchOrderId` with `status='pending'`
+   and the expected `amount`.
+2. On **both** the return handler and the notify handler, call
+   `$client->getOrderStatus($merchOrderId)` — never trust the callback params.
+3. Verify `$status->paid === true` **and** `$status->amount` matches your
+   stored amount.
+4. Grant idempotently with a compare-and-set, so the racing paths can't
+   double-fulfill:
+
+```php
+function settle(Telebirr $client, PDO $db, string $merchOrderId): void
+{
+    $status = $client->getOrderStatus($merchOrderId);
+    if (!$status->paid) {
+        return;
+    }
+
+    // Atomic claim: only one caller flips pending → success.
+    $stmt = $db->prepare(
+        "UPDATE orders SET status = 'success'
+         WHERE merch_order_id = :id AND status = 'pending' AND amount = :amount"
+    );
+    $stmt->execute(['id' => $merchOrderId, 'amount' => $status->amount]);
+
+    if ($stmt->rowCount() === 1) {
+        fulfillOrder($merchOrderId); // runs exactly once
+    }
+}
+```
+
+#### Notification acknowledgement contract
+
+- Telebirr POSTs the notification as a JSON body to your `notifyUrl`.
+- Acknowledge success with **HTTP 200** and a JSON body — this is what
+  `NotificationHandler::respondSuccess()` emits: `{"success": true}`.
+- Any non-2xx status tells Telebirr the delivery failed; it will **retry the
+  notification** later. Respond 200 once you have durably recorded the event,
+  and reserve error responses for "I could not record this, please retry".
+- Your `notifyUrl` must be publicly reachable — `localhost` or a private
+  address will never receive anything (the library warns about this at
+  construction time). In development use a tunnel (ngrok, cloudflared).
 
 ### Handle Payment Notifications
 
@@ -190,7 +296,10 @@ if (NotificationHandler::isPaymentSuccessful($notification)) {
 > **Framework usage:** instead of `->send()`, build a native response, e.g. in
 > Laravel: `return response(json: $resp->getBody(), status: $resp->getStatusCode());`
 
-### Query Order Status
+### Query Order Status (low level)
+
+Prefer `getOrderStatus()` above; the raw call remains available when you need
+the untouched response:
 
 ```php
 $tokenInfo = $client->applyFabricToken();
@@ -199,6 +308,18 @@ $orderStatus = $client->queryOrder($tokenInfo['token'], null, 'YOUR_ORDER_ID');
 $tradeStatus = $orderStatus['biz_content']['trade_status'] ?? '';
 if (strtoupper($tradeStatus) === 'PAY_SUCCESS') {
     // Payment successful
+}
+```
+
+### Check gateway health
+
+The sandbox can be flaky; probe it before a user-facing checkout if you want
+to degrade gracefully:
+
+```php
+$health = $client->ping(); // never throws
+if (!$health['ok']) {
+    // show "payment temporarily unavailable" instead of a broken checkout
 }
 ```
 
@@ -229,17 +350,62 @@ $refundResult = $client->refundOrder(
 
 The default HTTP client verifies the gateway's TLS certificate and applies
 timeouts (a payment gateway must not be called over an unverified or unbounded
-connection). Override only if you must:
+connection).
+
+**The Telebirr test gateway serves an incomplete certificate chain** (leaf
+only, missing intermediate), which used to fail verification with cURL error
+60 and push people toward `'verifySsl' => false`. The library now **ships the
+gateway's CA chain** (`src/certs/telebirr-ca.pem`): when system-store
+verification fails with error 60 and no custom bundle was supplied, the
+request is retried once against the bundled chain — so verification works out
+of the box. The bundled chain can only validate hosts issued under it (the
+Telebirr gateways); it never loosens verification for anything else. If
+verification still fails, the error explains the options.
 
 ```php
 $config = Config::forProduction([
     // ... credentials ...
-    'verifySsl'      => true,   // default true — leave on in production
-    'caBundlePath'   => null,   // optional path to a custom CA bundle (PEM)
+    'verifySsl'      => true,   // default true — leave on; the library warns (test) or
+                                 // logs an error (production) if you turn it off
+    'caBundlePath'   => null,   // optional path to a custom CA bundle (PEM);
+                                 // supplying one disables the bundled-CA fallback
     'timeout'        => 30,     // total request timeout (seconds)
     'connectTimeout' => 10,     // connection timeout (seconds)
 ]);
 ```
+
+### Token caching
+
+`createCheckoutUrl()` and `getOrderStatus()` cache the fabric token until its
+`expirationDate` (minus a 60s safety margin) **within the client instance**
+and reuse it, saving a gateway round-trip whenever one request performs
+several calls (e.g. a settle path). A rejected token (HTTP 401) drops the
+cache automatically. Note PHP's request lifecycle: the cache does not persist
+across requests. Opt out for strictly stateless behavior:
+
+```php
+$client = new Telebirr($config, null, null, ['cacheFabricToken' => false]);
+```
+
+`applyFabricToken()` always performs a real network call (and refreshes the
+cache), so existing manual flows are unaffected.
+
+### Retrying transient gateway errors
+
+The test gateway regularly throws transient infra errors (see the sandbox
+note below). Retry is **opt-in** with exponential backoff:
+
+```php
+$client = new Telebirr($config, $logger, null, [
+    'retry' => ['retries' => 2, 'delayMs' => 500, 'maxDelayMs' => 5000],
+]);
+```
+
+Only failures where `ApiException::isTransient()` is true are retried: known
+Telebirr infra codes (`49401024991` "southbound service unavailable"),
+HTTP 502/503/504, and cURL timeouts/connection drops. Parameter or auth
+errors fail immediately. The code list is
+`ApiException::TRANSIENT_TELEBIRR_ERROR_CODES`.
 
 ### PSR-3 logging
 
@@ -272,8 +438,45 @@ $client = new Telebirr($config, null, $fake);
 
 Every exception the library throws implements
 `Melaku\Telebirr\Exceptions\TelebirrExceptionInterface`, so you can catch them
-all in one place. API failures throw `ApiException`, which exposes
-`getHttpStatus()`, `getErrorCode()` and `getResponseBody()`.
+all in one place. API failures throw `ApiException`, which now carries
+Telebirr's parsed error envelope — no more `json_decode($e->getResponseBody())`:
+
+```php
+use Melaku\Telebirr\Exceptions\ApiException;
+
+try {
+    $client->createCheckoutUrl('Order 123', '100.00');
+} catch (ApiException $e) {
+    $e->getHttpStatus();       // e.g. 400
+    $e->getTelebirrCode();     // e.g. '49401024991' — parsed from the body
+    $e->getTelebirrMessage();  // Telebirr's errorMsg
+    $e->getTelebirrSolution(); // Telebirr's errorSolution remediation text
+    $e->isTransient();         // true for retryable gateway-side failures
+    $e->getResponseBody();     // raw body, if you need it
+}
+```
+
+### Amounts & rounding
+
+`amount` accepts `string|int|float` and is formatted to exactly 2 decimals —
+Telebirr's wire format for ETB. If you store amounts in minor units (cents),
+divide before passing (`$cents / 100`). Prefer passing a **string**
+(`'100.50'`) when the value came from user input or a DB decimal column,
+sidestepping binary floating-point surprises.
+
+### ⚠️ Sandbox instability
+
+The **test gateway is frequently unstable** and returns transient infra
+errors that look exactly like integration bugs — most commonly:
+
+```
+errorCode 49401024991: "southbound business service is unavailable"
+```
+
+If your request worked before and suddenly throws a `4940…` code with an
+`errorSolution` suggesting a retry, **it's the gateway, not your code**.
+Wait and retry (or enable the `retry` option above). Don't spend an hour
+debugging a correct integration.
 
 ## 📚 Documentation
 

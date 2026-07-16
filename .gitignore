@@ -33,3 +33,6 @@ examples/.env
 *.pem
 *.key
 examples/cacert.pem
+
+# The bundled Telebirr CA chain MUST ship with the library (exception to *.pem)
+!src/certs/telebirr-ca.pem
