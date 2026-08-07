@@ -13,10 +13,15 @@ require __DIR__ . '/../vendor/autoload.php';
 
 use Melaku\Telebirr\Config;
 use Melaku\Telebirr\Exceptions\ApiException;
+use Melaku\Telebirr\Exceptions\TelebirrException;
 use Melaku\Telebirr\Http\HttpClientException;
 use Melaku\Telebirr\Http\HttpClientInterface;
 use Melaku\Telebirr\Http\HttpResponse;
 use Melaku\Telebirr\KeyNormalizer;
+use Melaku\Telebirr\NotificationHandler;
+use Melaku\Telebirr\PaymentStatus;
+use Melaku\Telebirr\SignatureVerifier;
+use Melaku\Telebirr\Signer;
 use Melaku\Telebirr\Telebirr;
 use Psr\Log\AbstractLogger;
 
@@ -318,6 +323,98 @@ check($config->fabricAppId === 'explicit', 'explicit option overrides env var');
 foreach (['TELEBIRR_ENVIRONMENT', 'TELEBIRR_FABRIC_APP_ID', 'TELEBIRR_APP_SECRET', 'TELEBIRR_MERCHANT_APP_ID', 'TELEBIRR_MERCHANT_CODE', 'TELEBIRR_PRIVATE_KEY', 'TELEBIRR_NOTIFY_URL'] as $var) {
     unset($_ENV[$var]);
 }
+
+// ---------------------------------------------------------------------------
+// Server-to-server notifications (the notify leg's own dialect)
+// ---------------------------------------------------------------------------
+
+section('PaymentStatus notify dialect');
+check(PaymentStatus::isSuccess('Completed') === true, 'notify "Completed" reads as success');
+check(PaymentStatus::isSuccess('COMPLETED') === true, 'uppercase COMPLETED reads as success');
+check(PaymentStatus::isSuccess('PAY_SUCCESS') === true, 'return-leg PAY_SUCCESS still reads as success');
+check(PaymentStatus::isSuccess('PAY_FAILED') === false, 'PAY_FAILED still fails closed');
+check(PaymentStatus::isSuccess('') === false, 'empty status fails closed');
+
+section('NotificationHandler::unwrap');
+$flatNotification = [
+    'merch_order_id'   => 'ORDER123',
+    'trade_status'     => 'Completed',
+    'sign'             => 'abc',
+];
+check(NotificationHandler::unwrap($flatNotification) === $flatNotification, 'flat payload passes through untouched');
+check(
+    NotificationHandler::unwrap(['data' => $flatNotification]) === $flatNotification,
+    'data envelope is unwrapped'
+);
+$unrelatedData = ['merch_order_id' => 'ORDER123', 'data' => ['something' => 'else']];
+check(NotificationHandler::unwrap($unrelatedData) === $unrelatedData, 'unrelated "data" key is not mistaken for an envelope');
+check(
+    NotificationHandler::parse((string) json_encode(['data' => $flatNotification])) === $flatNotification,
+    'parse() unwraps, so verify/extract see a flat payload'
+);
+
+section('NotificationHandler::toUnixSeconds');
+check(NotificationHandler::toUnixSeconds('1784756474676') === 1784756474, 'epoch milliseconds convert to seconds');
+check(NotificationHandler::toUnixSeconds('1784756474') === 1784756474, 'epoch seconds pass through');
+check(NotificationHandler::toUnixSeconds('2026-08-07 10:41:13') === null, 'return-leg datetime string yields null, not a guess');
+check(NotificationHandler::toUnixSeconds('') === null, 'empty value yields null');
+check(NotificationHandler::toUnixSeconds(null) === null, 'missing value yields null');
+
+section('NotificationHandler::extractPaymentInfo');
+$notifyBody = [
+    'merch_order_id'   => 'ORDER123',
+    'merch_code'       => '123456',
+    'sign_type'        => 'SHA256WithRSA',
+    'payment_order_id' => 'TB123',
+    'notify_url'       => 'https://example.com/notify',
+    'appid'            => 'merchant-app-id',
+    'notify_time'      => '1784756474676',
+    'total_amount'     => '1.00',
+    'trans_currency'   => 'ETB',
+    'trade_status'     => 'Completed',
+    'trans_end_time'   => '1784756474000',
+    'transId'          => 'DGN80QBV5A',
+];
+$info = NotificationHandler::extractPaymentInfo($notifyBody);
+check($info['merchantOrderId'] === 'ORDER123', 'merchantOrderId extracted');
+check($info['transId'] === 'DGN80QBV5A', 'transId extracted (the id on the customer SMS receipt)');
+check($info['merchCode'] === '123456' && $info['appId'] === 'merchant-app-id', 'merchCode and appId extracted');
+check($info['notifyUrl'] === 'https://example.com/notify', 'notifyUrl echoed back is extracted');
+check($info['timestamp'] === '1784756474000', 'raw trans_end_time preserved verbatim');
+check($info['timestampUnix'] === 1784756474, 'trans_end_time also offered as Unix seconds');
+check($info['notifyTimeUnix'] === 1784756474, 'notify_time also offered as Unix seconds');
+check($info['raw'] === $notifyBody, 'full payload retained under raw');
+check(NotificationHandler::isPaymentSuccessful($notifyBody) === true, 'a Completed notification reads as paid');
+
+section('NotificationHandler::handle');
+$notifyConfig = Config::forTest(array_merge(baseOptions($pemPrivateKey), ['telebirrPublicKey' => $publicPem]));
+$signedBody = $notifyBody;
+$signedBody['sign'] = (new Signer($notifyConfig))->signString(SignatureVerifier::getCanonicalString($signedBody));
+$handled = NotificationHandler::handle((string) json_encode($signedBody), $notifyConfig);
+check($handled['isSuccess'] === true, 'valid Completed notification handled as success');
+check($handled['transId'] === 'DGN80QBV5A', 'handle() returns the extracted fields');
+
+$wrapped = NotificationHandler::handle((string) json_encode(['data' => $signedBody]), $notifyConfig);
+check($wrapped['isSuccess'] === true, 'the same body inside a data envelope handles identically');
+
+$tampered = $signedBody;
+$tampered['total_amount'] = '9999.00';
+$rejected = false;
+try {
+    NotificationHandler::handle((string) json_encode($tampered), $notifyConfig);
+} catch (TelebirrException $e) {
+    $rejected = true;
+}
+check($rejected, 'a tampered notification is rejected, not returned');
+
+$unsigned = $notifyBody;
+$rejected = false;
+try {
+    NotificationHandler::handle((string) json_encode($unsigned), $notifyConfig);
+} catch (TelebirrException $e) {
+    $rejected = true;
+}
+check($rejected, 'an unsigned notification fails closed');
 
 // ---------------------------------------------------------------------------
 // Backward compatibility smoke: createCheckoutUrl full flow

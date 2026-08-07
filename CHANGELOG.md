@@ -3,6 +3,61 @@
 All notable changes to `melaku/telebirr` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [2.3.0] — 2026-08-07
+
+The notify leg, corrected against a live production notification body. Fully
+backward compatible with 2.2.0 — existing keys and method signatures are
+unchanged; everything below is either a new method or a new array key.
+
+The theme: **the server-to-server notification does not speak the same dialect as
+the return URL or queryOrder**, and every one of those differences fails the same
+silent way. The signature verifies, the payment is genuinely complete, and
+fulfillment simply never runs — no exception, no error, no log line. It is
+indistinguishable from a callback that never arrived, which is exactly why it
+took so long to spot.
+
+### Fixed
+- **`trade_status: Completed` now reads as a successful payment.** The notify leg
+  reports `Completed` where the return URL and `queryOrder` report `PAY_SUCCESS`;
+  `PaymentStatus::isSuccess()` only knew the latter, so `isPaymentSuccessful()`
+  returned `false` for a verified, genuinely paid notification. This is the fix
+  that matters — the rest is ergonomics around it.
+- **`NotificationHandler::parse()` unwraps a `data` envelope** when Telebirr wraps
+  the body in one. Left wrapped, `merch_order_id` and `sign` are both absent as
+  far as every helper is concerned, so the callback reads as unsigned *and*
+  matching no order. Flat bodies (the common shape) pass through untouched — the
+  envelope is only unwrapped when the inner array actually carries
+  `merch_order_id`, so a payload with an unrelated `data` key is not mangled.
+
+### Added
+- **`NotificationHandler::handle($rawJson, $config)`** — parse, unwrap, verify and
+  extract in one call, mirroring `ReturnUrlHandler::handle()`. Fails closed:
+  throws `TelebirrException` on a missing or invalid signature rather than
+  returning something that looks usable. Returns `extractPaymentInfo()` plus an
+  `isSuccess` boolean.
+- **`NotificationHandler::unwrap()`** — the envelope logic on its own, for
+  integrators who call `parse()`/`verify()` separately.
+- **`extractPaymentInfo()` now returns `transId`** — Telebirr's short transaction
+  id, the one printed on the customer's SMS receipt and the one they quote to
+  your support desk. It was being parsed and thrown away.
+- **`extractPaymentInfo()` also returns `merchCode`, `appId`, `notifyUrl` and
+  `raw`.** `notifyUrl` is the callback URL Telebirr echoes back — the first thing
+  worth logging when notifications are not arriving.
+- **`NotificationHandler::toUnixSeconds()`**, plus `timestampUnix` /
+  `notifyTimeUnix` keys on `extractPaymentInfo()`. The notify leg sends epoch
+  **milliseconds** (`1784756474676`) where the return URL sends a formatted
+  `Y-m-d H:i:s` string. Non-numeric values yield `null` rather than a guess: the
+  formatted strings carry no timezone, and assuming one would quietly shift every
+  timestamp.
+
+### Notes
+- Signature verification was **not** changed. A real notification body verifies
+  under the existing RSA-PSS path, over a canonical string that includes the
+  non-standard `transId` and `notify_url` fields — confirmed end to end against a
+  live payload, so no PKCS#1 fallback is warranted.
+- 23 new tests cover the dialect, the envelope, timestamp normalization, and
+  `handle()`'s fail-closed behaviour on tampered and unsigned bodies.
+
 ## [2.2.0] — 2026-07-16
 
 Driven by field notes from a real integration (same batch as telebirr-js 3.1.0).

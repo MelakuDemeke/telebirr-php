@@ -270,28 +270,68 @@ function settle(Telebirr $client, PDO $db, string $merchOrderId): void
 
 ### Handle Payment Notifications
 
+`NotificationHandler::handle()` is the recommended entry point — it parses,
+unwraps, verifies and extracts in one call, and **fails closed** by throwing on a
+missing or invalid signature.
+
 ```php
 use Melaku\Telebirr\NotificationHandler;
+use Melaku\Telebirr\Exceptions\TelebirrException;
 
-$rawData = file_get_contents('php://input');
-$notification = NotificationHandler::parse($rawData);
-
-// Verify signature
-if (!NotificationHandler::verify($notification, $config)) {
-    // respond* now RETURN a NotificationResponse (no header()/echo). In a
+try {
+    $payment = NotificationHandler::handle(file_get_contents('php://input'), $config);
+} catch (TelebirrException $e) {
+    // respond* RETURN a NotificationResponse (no header()/echo). In a
     // framework, convert it to your Response object. In bare PHP, call send().
-    NotificationHandler::respondError('Invalid signature')->send();
+    NotificationHandler::respondError('Invalid signature', 401)->send();
     exit;
 }
 
-// Process payment
-if (NotificationHandler::isPaymentSuccessful($notification)) {
-    $paymentInfo = NotificationHandler::extractPaymentInfo($notification);
-    // Update database, fulfill order, etc.
-
-    NotificationHandler::respondSuccess('Payment processed')->send();
+if ($payment['isSuccess']) {
+    // Confirm server-to-server before fulfilling — see the settlement pattern above.
+    $status = $client->getOrderStatus($payment['merchantOrderId']);
+    if ($status->paid && $status->amount === $expectedAmount) {
+        // Update database, fulfill order, etc. — idempotently.
+    }
 }
+
+NotificationHandler::respondSuccess('Payment processed')->send();
 ```
+
+The lower-level `parse()` / `verify()` / `isPaymentSuccessful()` /
+`extractPaymentInfo()` calls remain available and unchanged if you need the steps
+separately.
+
+#### Notify parameters (the raw contract)
+
+Telebirr POSTs a JSON body to your `notifyUrl`. **It does not use the same
+conventions as the return URL** — the differences below are handled for you, but
+they are the reason a hand-rolled notify handler tends to fail silently.
+
+| Parameter | Meaning |
+|---|---|
+| `merch_order_id` | Your merchant order id, echoed back verbatim |
+| `payment_order_id` | Telebirr's transaction reference |
+| `transId` | Short transaction id — the one on the customer's SMS receipt |
+| `trade_status` | **`Completed`** — *not* `PAY_SUCCESS` as on the return leg |
+| `total_amount` | Order amount |
+| `trans_currency` | Currency (`ETB`) |
+| `trans_end_time`, `notify_time` | Epoch **milliseconds** — the return URL sends `Y-m-d H:i:s` strings instead |
+| `merch_code`, `appid`, `notify_url` | Echoed back; part of the signed payload, so they must be kept when verifying |
+| `sign`, `sign_type` | RSA-PSS signature over the other params |
+
+Three consequences, all handled by `handle()`:
+
+- **`Completed` is the success word on this leg.** `PaymentStatus::isSuccess()`
+  accepts it. A handler that only checks `PAY_SUCCESS` will verify a genuine
+  payment and then silently skip fulfillment — no error, no log line.
+- **The body is sometimes wrapped in a `data` envelope.** `parse()` unwraps it.
+  Left wrapped, both the order id and the signature are invisible, so the
+  callback reads as unsigned *and* unmatched.
+- **Timestamps are milliseconds.** `extractPaymentInfo()` returns the raw values
+  under `timestamp` / `notifyTime` and normalized Unix seconds under
+  `timestampUnix` / `notifyTimeUnix` (null for the return leg's formatted
+  strings, which carry no timezone worth guessing at).
 
 > **Framework usage:** instead of `->send()`, build a native response, e.g. in
 > Laravel: `return response(json: $resp->getBody(), status: $resp->getStatusCode());`
