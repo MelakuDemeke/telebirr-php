@@ -337,9 +337,111 @@ class Telebirr
 	 */
 	public function buildCheckoutUrl(string $prepayId): string
 	{
-		$rawRequest = $this->buildRawCheckoutRequest($prepayId);
+		$rawRequest = $this->buildPayRequest($prepayId);
 
 		return $this->config->webBaseUrl . $rawRequest . '&version=1.0&trade_type=Checkout';
+	}
+
+	/**
+	 * Build the signed raw pay request string for the SuperApp Mini App bridge.
+	 *
+	 * When your merchant H5 page runs inside the Telebirr SuperApp, the payment
+	 * is triggered from the front-end via the `js_fun_start_pay` bridge API
+	 * (`window.ma.js_fun_start_pay(rawRequest)`). This method produces exactly
+	 * the signed `rawRequest` string that call expects.
+	 *
+	 * It is the same signed parameter string used by {@see buildCheckoutUrl()},
+	 * without the extra `version`/`trade_type` query parameters that the web
+	 * paygate URL appends — the SuperApp bridge must receive only the signed
+	 * fields plus `sign` and `sign_type`:
+	 *
+	 * - appid: Merchant application ID
+	 * - merch_code: Merchant code
+	 * - nonce_str: Random nonce string (32 characters)
+	 * - prepay_id: Prepayment ID from createOrder response
+	 * - timestamp: Unix timestamp
+	 *
+	 * Signed with RSA-PSS SHA256 (see {@see Signer}); the signature is base64-encoded.
+	 *
+	 * @param string $prepayId The prepay_id obtained from createOrder() response (biz_content.prepay_id)
+	 * @return string URL-encoded query string (no base URL, no `?` prefix) ready for js_fun_start_pay
+	 */
+	public function buildPayRequest(string $prepayId): string
+	{
+		$map = [
+			'appid'     => $this->config->merchantAppId,
+			'merch_code' => $this->config->merchantCode,
+			'nonce_str' => Signer::createNonceStr(),
+			'prepay_id' => $prepayId,
+			'timestamp' => Signer::createTimeStamp(),
+		];
+
+		$sign = $this->signer->signRequestObject($map);
+
+		$parts = [
+			'appid=' . $map['appid'],
+			'merch_code=' . $map['merch_code'],
+			'nonce_str=' . $map['nonce_str'],
+			'prepay_id=' . $map['prepay_id'],
+			'timestamp=' . $map['timestamp'],
+			'sign=' . $sign,
+			'sign_type=SHA256WithRSA',
+		];
+
+		return implode('&', $parts);
+	}
+
+	/**
+	 * Exchange a SuperApp `access_token` for the Telebirr user profile.
+	 *
+	 * When your merchant H5 page runs inside the Telebirr SuperApp, the bridge
+	 * (e.g. `window.ma.getAccessToken`) provides a user `access_token`. This
+	 * method exchanges it for the Telebirr profile (OpenId / payment authtoken)
+	 * so the merchant can auto-authenticate the shopper — the auto-login step
+	 * of the SuperApp Mini App flow.
+	 *
+	 * - Endpoint: POST /payment/v1/auth/authToken
+	 * - Method: payment.authtoken
+	 * - trade_type: InApp, resource_type: OpenId
+	 *
+	 * @param string $accessToken The user access token obtained from the SuperApp bridge
+	 * @return array Parsed API response (carries openid / authToken on success)
+	 * @throws ApiException on API errors or invalid responses
+	 * @throws InvalidParameterException if accessToken is empty
+	 */
+	public function exchangeAuthToken(string $accessToken): array
+	{
+		if ($accessToken === '') {
+			throw new InvalidParameterException(
+				'accessToken',
+				$accessToken,
+				'accessToken must not be empty'
+			);
+		}
+
+		$req = [
+			'timestamp' => Signer::createTimeStamp(),
+			'nonce_str' => Signer::createNonceStr(),
+			'method'    => 'payment.authtoken',
+			'version'   => '1.0',
+		];
+
+		$req['biz_content'] = [
+			'access_token'  => $accessToken,
+			'trade_type'    => 'InApp',
+			'appid'         => $this->config->merchantAppId,
+			'resource_type' => 'OpenId',
+		];
+
+		$req['sign']      = $this->signer->signRequestObject($req);
+		$req['sign_type'] = 'SHA256WithRSA';
+
+		return $this->sendApiRequest(
+			'exchangeAuthToken',
+			$this->config->baseUrl . '/payment/v1/auth/authToken',
+			$req,
+			$this->getFabricToken()
+		);
 	}
 
 	/**
@@ -755,34 +857,6 @@ class Telebirr
 		$req['sign_type'] = 'SHA256WithRSA';
 
 		return $req;
-	}
-
-	/**
-	 * Internal: build raw request string for the web checkout URL.
-	 */
-	private function buildRawCheckoutRequest(string $prepayId): string
-	{
-		$map = [
-			'appid'     => $this->config->merchantAppId,
-			'merch_code' => $this->config->merchantCode,
-			'nonce_str' => Signer::createNonceStr(),
-			'prepay_id' => $prepayId,
-			'timestamp' => Signer::createTimeStamp(),
-		];
-
-		$sign = $this->signer->signRequestObject($map);
-
-		$parts = [
-			'appid=' . $map['appid'],
-			'merch_code=' . $map['merch_code'],
-			'nonce_str=' . $map['nonce_str'],
-			'prepay_id=' . $map['prepay_id'],
-			'timestamp=' . $map['timestamp'],
-			'sign=' . $sign,
-			'sign_type=SHA256WithRSA',
-		];
-
-		return implode('&', $parts);
 	}
 
 	/**

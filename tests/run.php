@@ -13,6 +13,7 @@ require __DIR__ . '/../vendor/autoload.php';
 
 use Melaku\Telebirr\Config;
 use Melaku\Telebirr\Exceptions\ApiException;
+use Melaku\Telebirr\Exceptions\InvalidParameterException;
 use Melaku\Telebirr\Exceptions\TelebirrException;
 use Melaku\Telebirr\Http\HttpClientException;
 use Melaku\Telebirr\Http\HttpClientInterface;
@@ -429,6 +430,83 @@ $client = new Telebirr(Config::forTest(baseOptions($pemPrivateKey)), null, $http
 $checkout = $client->createCheckoutUrl('Order 123', '100.00', 'ORDER123');
 check($checkout->getMerchOrderId() === 'ORDER123', 'exact merchOrderId returned');
 check(strpos($checkout->getCheckoutUrl(), 'prepay_id=PID123') !== false, 'checkout URL contains prepay_id');
+
+// ---------------------------------------------------------------------------
+// SuperApp Mini App: buildPayRequest + exchangeAuthToken
+// ---------------------------------------------------------------------------
+
+section('buildPayRequest (SuperApp js_fun_start_pay raw request)');
+$http = new FakeHttpClient([]);
+$client = new Telebirr(Config::forTest(baseOptions($pemPrivateKey)), null, $http);
+$raw = $client->buildPayRequest('PID123');
+
+parse_str($raw, $params);
+check(($params['appid'] ?? '') === 'merchant-app-id', 'raw request carries appid');
+check(($params['merch_code'] ?? '') === '123456', 'raw request carries merch_code');
+check(($params['prepay_id'] ?? '') === 'PID123', 'raw request carries prepay_id');
+check(isset($params['nonce_str']) && $params['nonce_str'] !== '', 'raw request carries nonce_str');
+check(isset($params['timestamp']) && ctype_digit($params['timestamp']), 'raw request carries numeric timestamp');
+check(($params['sign_type'] ?? '') === 'SHA256WithRSA', 'sign_type is SHA256WithRSA');
+check(isset($params['sign']) && $params['sign'] !== '', 'raw request carries a signature');
+check(count($params) === 7, 'exactly the 7 bridge params (5 signed fields + sign + sign_type)');
+// parse_str decodes base64 "+" in sign to a space; the SuperApp bridge consumes the
+// raw string verbatim, so verify with raw (undecoded) values.
+$rawParams = [];
+foreach (explode('&', $raw) as $pair) {
+    [$k, $v] = explode('=', $pair, 2);
+    $rawParams[$k] = $v;
+}
+check(SignatureVerifier::verify($rawParams, $publicPem) === true, 'signature verifies against the merchant public key');
+check(!isset($params['version']) && !isset($params['trade_type']), 'no version/trade_type appended (unlike the web checkout URL)');
+
+section('buildCheckoutUrl still uses the same signed base');
+$checkoutUrl = $client->buildCheckoutUrl('PID123');
+check(strpos($checkoutUrl, '&version=1.0&trade_type=Checkout') !== false, 'web checkout URL appends version/trade_type');
+$checkoutParams = [];
+parse_str((string) parse_url($checkoutUrl, PHP_URL_QUERY), $checkoutParams);
+check(count($checkoutParams) === 9, 'checkout query = 7 base params + version + trade_type');
+check(($checkoutParams['prepay_id'] ?? '') === 'PID123', 'checkout URL still carries prepay_id');
+
+section('exchangeAuthToken');
+$authResponse = new HttpResponse(200, json_encode([
+    'code'           => '00000',
+    'openid'         => 'OpenId123',
+    'authToken'      => 'AuthToken456',
+    'expirationDate' => '1700000000000',
+]));
+$http = new FakeHttpClient([tokenResponse(), $authResponse]);
+$client = new Telebirr(Config::forTest(baseOptions($pemPrivateKey)), null, $http);
+$profile = $client->exchangeAuthToken('superapp-access-token');
+check(($profile['openid'] ?? '') === 'OpenId123', 'response passthrough with openid');
+check(count($http->calls) === 2, 'fabric token fetched first, then the authToken call');
+$authCall = $http->calls[1];
+check(strpos($authCall['url'], '/payment/v1/auth/authToken') !== false, 'calls the authToken endpoint');
+check(in_array('Authorization: Bearer abc', $authCall['headers'], true), 'Authorization header carries the fabric token');
+$body = json_decode($authCall['body'], true);
+check(($body['method'] ?? '') === 'payment.authtoken', 'method is payment.authtoken');
+check(($body['version'] ?? '') === '1.0', 'version is 1.0');
+check(($body['biz_content']['access_token'] ?? '') === 'superapp-access-token', 'biz_content carries the access_token');
+check(($body['biz_content']['trade_type'] ?? '') === 'InApp', 'trade_type is InApp');
+check(($body['biz_content']['appid'] ?? '') === 'merchant-app-id', 'biz_content carries the merchant appid');
+check(($body['biz_content']['resource_type'] ?? '') === 'OpenId', 'resource_type is OpenId');
+check(($body['sign_type'] ?? '') === 'SHA256WithRSA' && isset($body['sign']) && $body['sign'] !== '', 'request is signed');
+
+$emptyRejected = false;
+try {
+    $client->exchangeAuthToken('');
+} catch (InvalidParameterException $e) {
+    $emptyRejected = true;
+}
+check($emptyRejected, 'empty access_token is rejected');
+
+$http = new FakeHttpClient([tokenResponse(), new HttpResponse(400, json_encode(['errorCode' => '49401024995', 'errorMsg' => 'bad token']))]);
+$client = new Telebirr(Config::forTest(baseOptions($pemPrivateKey)), null, $http);
+try {
+    $client->exchangeAuthToken('bad-token');
+    check(false, 'gateway error should throw (should not reach here)');
+} catch (ApiException $ex) {
+    check($ex->getTelebirrCode() === '49401024995', 'gateway error surfaces as ApiException with the Telebirr code');
+}
 
 // ---------------------------------------------------------------------------
 
