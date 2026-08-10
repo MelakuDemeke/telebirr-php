@@ -3,6 +3,23 @@
 All notable changes to `melaku/telebirr` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **`Telebirr::buildPayRequest(string $prepayId): string`** — public access to the
+  signed raw pay request string for the SuperApp Mini App bridge
+  (`window.ma.js_fun_start_pay(rawRequest)`). Previously only available internally
+  as part of `buildCheckoutUrl()`; the web checkout URL is unchanged and still
+  appends `&version=1.0&trade_type=Checkout` after the same signed base.
+- **`Telebirr::exchangeAuthToken(string $accessToken): array`** — the auto-login
+  step of the SuperApp Mini App flow: exchanges the user `access_token` obtained
+  from the SuperApp bridge for the Telebirr profile (`openid` / payment authtoken)
+  via `POST /payment/v1/auth/authToken` (`payment.authtoken`, `trade_type=InApp`).
+
+Both methods mirror the exact flow of the SuperApp Mini App integration guide:
+fabric token → create order → bridge launch, with the authToken exchange for
+auto-login.
+
 ## [2.3.0] — 2026-08-07
 
 The notify leg, corrected against a live production notification body. Fully

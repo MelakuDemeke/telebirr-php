@@ -87,6 +87,43 @@ header('Content-Type: application/json');
 echo json_encode(['receiveCode' => $receiveCode]);
 ```
 
+### SuperApp Mini App (H5 inside the Telebirr SuperApp)
+
+When your merchant H5 page runs inside the Telebirr SuperApp, the payment is
+launched from the front-end through the SuperApp's JS bridge, not through a
+browser redirect. The flow needs two pieces from this library:
+
+**1. Auto-login — `exchangeAuthToken()`.** The bridge hands your front-end a user
+`access_token`; exchange it for the Telebirr profile (`openid` / payment authtoken)
+so the shopper is already signed in inside the SuperApp:
+
+```php
+$profile = $client->exchangeAuthToken($accessTokenFromBridge);
+// $profile['openid'] — Telebirr profile id (auto-login succeeded)
+```
+
+**2. Launch the payment — `buildPayRequest()`.** Create the order as usual, then
+build the signed raw request string the bridge expects:
+
+```php
+$tokenInfo   = $client->applyFabricToken();
+$order       = $client->createOrder($tokenInfo['token'], 'Order 123', '100.00', 'ORDER123');
+$prepayId    = $order['biz_content']['prepay_id'];
+
+$rawRequest  = $client->buildPayRequest($prepayId);
+```
+
+Pass `$rawRequest` to the front-end, which starts the payment sheet:
+
+```js
+window.ma.js_fun_start_pay(rawRequest); // resolves via the bridge callback
+```
+
+That's the whole backend. Settlement is unchanged — Telebirr POSTs the
+server-to-server notification to your `notifyUrl`; verify it with
+`NotificationHandler` and confirm the real status with `getOrderStatus()`
+before fulfilling.
+
 ## 📋 Configuration
 
 ### Required Credentials
