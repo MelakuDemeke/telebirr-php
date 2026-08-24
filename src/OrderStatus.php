@@ -35,6 +35,16 @@ final class OrderStatus
     /** Transaction end time as reported by Telebirr, when available. */
     public ?string $transEndTime;
 
+    /**
+     * Telebirr's short transaction id — the reference printed on the customer's
+     * SMS receipt, and the one they quote in a support call.
+     *
+     * queryOrder returns it as `trans_id`; the notify leg sends the same value
+     * as `transId`. Empty string when the gateway did not supply one, which is
+     * normal for an order that has not been paid yet.
+     */
+    public string $transId;
+
     /** The full queryOrder response, for anything not covered above. */
     public array $raw;
 
@@ -48,7 +58,8 @@ final class OrderStatus
         ?string $paymentOrderId,
         string $merchOrderId,
         ?string $transEndTime,
-        array $raw
+        array $raw,
+        string $transId = ''
     ) {
         $this->paid = $paid;
         $this->failed = $failed;
@@ -60,6 +71,7 @@ final class OrderStatus
         $this->merchOrderId = $merchOrderId;
         $this->transEndTime = $transEndTime;
         $this->raw = $raw;
+        $this->transId = $transId;
     }
 
     public function toArray(): array
@@ -74,6 +86,7 @@ final class OrderStatus
             'paymentOrderId' => $this->paymentOrderId,
             'merchOrderId'   => $this->merchOrderId,
             'transEndTime'   => $this->transEndTime,
+            'transId'        => $this->transId,
         ];
     }
 }

@@ -3,6 +3,109 @@
 All notable changes to `melaku/telebirr` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [2.4.0] — 2026-08-21
+
+Signature verification, corrected against a live production notification from
+merchant 500289. Fully backward compatible with 2.3.0 — no signature changes, no
+new required configuration. Both fixes below only ever *widen* which bytes and
+which string are accepted as the signed material; every candidate is still
+checked against the same public key, so forging one continues to require
+Telebirr's private key.
+
+The theme, again: **a correct integration, a correct key, and a genuinely paid
+notification that is refused anyway.** Both defects present as `Invalid
+signature`, which reads as "someone is attacking you" or "your key is wrong" and
+sends integrators looking in exactly the wrong place.
+
+### Fixed
+- **Telebirr signs the transaction id as `trans_id` and sends it as `transId`.**
+  Their integration guide names the field `trans_id` in its sample callback; the
+  JSON the gateway actually POSTs calls it `transId`. The canonical string is
+  built from the keys as received, so it could never match the one they hashed,
+  and **every notification carrying a transaction id was refused**. The rename
+  breaks verification twice, which is why no reordering of the received keys
+  rescues it: `transId` sorts *before* `trans_currency` (`I` is 0x49, `_` is
+  0x5F) while `trans_id` sorts *after* `trans_end_time` — wrong name and wrong
+  position from one substitution. `SignatureVerifier` now tries the payload
+  exactly as received first, then the aliased spelling, so a gateway that ever
+  names the field consistently keeps working with no change here.
+
+  Evidence: the notify for `AFROTESTHGSCFT8BPU8YMB` (2026-08-21, merchant
+  500289) fails all 8,188 combinations of the received keys — every non-empty
+  subset of the 11 fields, times four orderings, times PSS and PKCS#1, against
+  two different public keys — and verifies on the first attempt once renamed.
+  The same payment's *return* leg verified untouched throughout, because the
+  return carries no transaction id at all. That asymmetry is why the defect
+  survives a merchant being issued the correct production key: two of the three
+  legs go green and the notify looks like a key problem.
+
+- **A URL-mangled signature could decode to the wrong bytes without error.**
+  `base64_decode()` skips whitespace *even in strict mode*, so a signature whose
+  `+` characters were turned into spaces by form decoding still decoded
+  "successfully" — to shorter, wrong bytes. The decoder returned that first
+  reading and never reached the repaired one. `SignatureVerifier` now tries every
+  distinct decoding against the key rather than the first that parses. Verified:
+  `base64_decode('QQ  ==', true)` returns a string, not `false`; a 512-character
+  mangled signature decodes to 379 bytes where the repaired one gives 384.
+
+- **`normalizeSignature()` now repairs spaces unconditionally.** It previously
+  substituted only when the signature contained no `+` at all, which gave up on
+  the one case that needs help: a partially encoded signature carrying both a
+  literal `+` (from `%2B`) and a mangled space. A space can never be legitimate
+  base64 content, so substituting always is strictly safe. Telebirr sends the
+  raw `+` unencoded in the return URL's query string, so this path is routine
+  rather than exotic.
+
+- **`getOrderStatus()` now reads `order_status`.** queryOrder answers with
+  `order_status`, where the notify leg sends `trade_status: Completed` and the
+  return leg sends `trade_status: PAY_SUCCESS`. The mapper only knew
+  `trade_status`/`tradeStatus`, so `OrderStatus::$tradeStatus` came back empty
+  and **`paid` was `false` for a genuinely paid order** — no exception, no error,
+  the same silent shape as the notify dialect bug fixed in 2.3.0. This is the
+  leg most integrations lean on when a callback is late, so it fails at exactly
+  the wrong moment.
+- **`getOrderStatus()` now reads `trans_time`.** queryOrder names the timestamp
+  `trans_time`; only `trans_end_time` was read, so `OrderStatus::$transEndTime`
+  was always `null` on that leg.
+
+### Added
+- **`OrderStatus::$transId`** — queryOrder returns the short transaction id as
+  `trans_id` (the notify leg sends the same value as `transId`); both spellings
+  are accepted and it is now surfaced instead of being left in `raw`. Added as a
+  trailing optional constructor argument, so existing construction is unaffected.
+- **`ReturnUrlHandler::handle()` now returns the same shape as
+  `NotificationHandler::extractPaymentInfo()`** — gaining `transId`, `merchCode`,
+  `appId`, `notifyUrl`, `notifyTime`, `timestampUnix` and `notifyTimeUnix`.
+  Settlement code no longer has to care which leg delivered the payment. Purely
+  additive; existing keys are unchanged. `transId` is empty on this leg because
+  the return URL carries no transaction id — which is precisely why the return
+  was the one leg unaffected by the signing mismatch above.
+
+### The three legs, side by side
+
+Telebirr does not use one vocabulary. As of this release the library normalizes
+all three, but the raw differences are worth knowing when reading gateway logs:
+
+| Concept | notify | return URL | queryOrder |
+|---|---|---|---|
+| status field | `trade_status` | `trade_status` | **`order_status`** |
+| success value | `Completed` | `PAY_SUCCESS` | `PAY_SUCCESS` |
+| transaction id | `transId` (signed as `trans_id`) | *absent* | `trans_id` |
+| timestamp field | `trans_end_time` | `trans_end_time` | **`trans_time`** |
+| timestamp format | epoch milliseconds | `Y-m-d H:i:s` | `Y-m-d H:i:s` |
+
+### Notes
+- `verifyFromRawQueryString()` now shares the same verification path, so it gets
+  both fixes too.
+- Ethio Telecom's developer portal documents **neither** of these. Its
+  `Notify_Callback` page contains no mention of "verify", "signature" or "public
+  key" — the inbound direction is simply not covered — and its
+  `Request_signature_Process` page is entirely about signing *outbound* requests
+  with *your* private key. Note also that its JavaScript sample specifies
+  `SHA256withRSAandMGF1` and its Java sample `SHA256withRSA/PSS` (both PSS) while
+  its Python sample uses PKCS#1 v1.5. Every real payload observed to date is PSS,
+  which is what this library verifies.
+
 ## [2.3.0] — 2026-08-07
 
 The notify leg, corrected against a live production notification body. Fully

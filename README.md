@@ -336,6 +336,51 @@ Three consequences, all handled by `handle()`:
 > **Framework usage:** instead of `->send()`, build a native response, e.g. in
 > Laravel: `return response(json: $resp->getBody(), status: $resp->getStatusCode());`
 
+#### The three legs do not share a vocabulary
+
+Telebirr describes the same payment differently depending on which leg reports
+it. The library normalizes all three, so `isSuccess` / `OrderStatus::$paid` and
+the extracted arrays mean the same thing everywhere — but the raw differences
+matter when you are reading gateway logs or debugging by hand:
+
+| Concept | notify | return URL | queryOrder |
+|---|---|---|---|
+| status field | `trade_status` | `trade_status` | `order_status` |
+| success value | `Completed` | `PAY_SUCCESS` | `PAY_SUCCESS` |
+| transaction id | `transId` (signed as `trans_id`) | *absent* | `trans_id` |
+| timestamp field | `trans_end_time` | `trans_end_time` | `trans_time` |
+| timestamp format | epoch milliseconds | `Y-m-d H:i:s` | `Y-m-d H:i:s` |
+
+`ReturnUrlHandler::handle()` and `NotificationHandler::extractPaymentInfo()`
+return the same keys, so settlement code does not need to know which leg it is
+holding. Fields a given leg does not carry come back as empty strings, and
+`timestampUnix` / `notifyTimeUnix` are `null` when the value is not an epoch
+rather than being guessed at.
+
+#### What the signature check tolerates
+
+Telebirr's own payloads are not internally consistent, and the library absorbs
+two specific discrepancies so you do not have to. Both only widen which string
+or which bytes are accepted as the signed material — every candidate is checked
+against the same public key, so forging one still requires Telebirr's private
+key.
+
+- **`transId` vs `trans_id`.** Telebirr hashes the transaction id under
+  `trans_id` — the name their integration guide uses — but puts `transId` on the
+  wire. A canonical string built from the keys as received therefore never
+  matches theirs, and the notification is refused. Verification tries the payload
+  exactly as received first, then the aliased spelling. Only the notify leg is
+  affected; the return URL carries no transaction id, so it verifies either way.
+- **`+` arriving as a space.** Telebirr sends the raw `+` of a base64 signature
+  unencoded in the return URL, so form decoding turns it into a space. Spaces are
+  repaired, and every distinct decoding is tried against the key — necessary
+  because PHP's `base64_decode()` skips whitespace even in strict mode and will
+  happily return the *wrong* bytes for a mangled signature rather than failing.
+
+If a signature you believe is genuine is still refused, the cause is almost
+always the public key rather than the payload: the key issued for the developer
+portal is not the key a production merchant signs with.
+
 ### Query Order Status (low level)
 
 Prefer `getOrderStatus()` above; the raw call remains available when you need

@@ -518,10 +518,21 @@ class Telebirr
 			return '';
 		};
 
-		$tradeStatus = $pick(['trade_status', 'tradeStatus']);
+		// The three legs do not share a vocabulary. queryOrder answers with
+		// **`order_status`** where the notify sends `trade_status: Completed`
+		// and the return sends `trade_status: PAY_SUCCESS`. Reading only
+		// `trade_status` here left $tradeStatus empty for a genuinely paid
+		// order, so `paid` came back false with no error to notice -- the same
+		// silent-failure shape as the notify dialect bug fixed in 2.3.0.
+		// Confirmed against production merchant 500289 on 2026-08-21.
+		$tradeStatus = $pick(['trade_status', 'tradeStatus', 'order_status', 'orderStatus']);
 		$paymentOrderId = $pick(['payment_order_id', 'paymentOrderId']);
-		$transEndTime = $pick(['trans_end_time', 'transEndTime']);
+		// queryOrder calls the timestamp `trans_time`, not `trans_end_time`.
+		$transEndTime = $pick(['trans_end_time', 'transEndTime', 'trans_time', 'transTime']);
 		$currency = $pick(['trans_currency', 'transCurrency']);
+		// queryOrder spells the transaction id `trans_id`; the notify leg sends
+		// the same value as `transId`. Accept either.
+		$transId = $pick(['trans_id', 'transId']);
 
 		return new OrderStatus(
 			$tradeStatus !== '' && PaymentStatus::isSuccess($tradeStatus),
@@ -533,7 +544,8 @@ class Telebirr
 			$paymentOrderId !== '' ? $paymentOrderId : null,
 			$pick(['merch_order_id', 'merchOrderId']) !== '' ? $pick(['merch_order_id', 'merchOrderId']) : (string) $merchOrderId,
 			$transEndTime !== '' ? $transEndTime : null,
-			$result
+			$result,
+			$transId
 		);
 	}
 

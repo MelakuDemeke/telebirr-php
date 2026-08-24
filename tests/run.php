@@ -20,6 +20,7 @@ use Melaku\Telebirr\Http\HttpResponse;
 use Melaku\Telebirr\KeyNormalizer;
 use Melaku\Telebirr\NotificationHandler;
 use Melaku\Telebirr\PaymentStatus;
+use Melaku\Telebirr\ReturnUrlHandler;
 use Melaku\Telebirr\SignatureVerifier;
 use Melaku\Telebirr\Signer;
 use Melaku\Telebirr\Telebirr;
@@ -266,6 +267,40 @@ $http = new FakeHttpClient([tokenResponse(), new HttpResponse(200, json_encode([
 $client = new Telebirr(Config::forTest(baseOptions($pemPrivateKey)), null, $http);
 check($client->getOrderStatus('ORDER123')->paid === false, 'missing trade_status fails closed');
 
+// queryOrder speaks its own dialect: `order_status`, not `trade_status`, and
+// `trans_time`, not `trans_end_time`. Reading only the latter left tradeStatus
+// empty and reported a genuinely paid order as unpaid -- silently. Body copied
+// from a real production response (merchant 500289, 2026-08-21).
+$http = new FakeHttpClient([tokenResponse(), new HttpResponse(200, json_encode([
+    'code' => '00000',
+    'biz_content' => [
+        'merch_order_id'   => 'AFROTESTF62S9L5EJBDUAR',
+        'order_status'     => 'PAY_SUCCESS',
+        'payment_order_id' => '108N11088L17102600001002',
+        'trans_time'       => '2026-08-21 17:10:27',
+        'trans_currency'   => 'ETB',
+        'total_amount'     => '1.00',
+        'trans_id'         => 'DHL91SAMXZ',
+    ],
+]))]);
+$client = new Telebirr(Config::forTest(baseOptions($pemPrivateKey)), null, $http);
+$status = $client->getOrderStatus('AFROTESTF62S9L5EJBDUAR');
+check($status->paid === true, 'queryOrder order_status: PAY_SUCCESS maps to paid');
+check($status->tradeStatus === 'PAY_SUCCESS', 'order_status is surfaced as tradeStatus');
+check($status->transEndTime === '2026-08-21 17:10:27', 'queryOrder trans_time is read as the timestamp');
+check($status->transId === 'DHL91SAMXZ', 'queryOrder trans_id is exposed as transId');
+check($status->paymentOrderId === '108N11088L17102600001002', 'payment_order_id still mapped');
+
+// An unpaid order must still fail closed through the same path.
+$http = new FakeHttpClient([tokenResponse(), new HttpResponse(200, json_encode([
+    'code' => '00000',
+    'biz_content' => ['merch_order_id' => 'ORDER123', 'order_status' => 'WAIT_PAY', 'trans_id' => ''],
+]))]);
+$client = new Telebirr(Config::forTest(baseOptions($pemPrivateKey)), null, $http);
+$waiting = $client->getOrderStatus('ORDER123');
+check($waiting->paid === false, 'order_status: WAIT_PAY is not paid');
+check($waiting->transId === '', 'an unpaid order reports an empty transId, not null');
+
 // ---------------------------------------------------------------------------
 // ping
 // ---------------------------------------------------------------------------
@@ -429,6 +464,111 @@ $client = new Telebirr(Config::forTest(baseOptions($pemPrivateKey)), null, $http
 $checkout = $client->createCheckoutUrl('Order 123', '100.00', 'ORDER123');
 check($checkout->getMerchOrderId() === 'ORDER123', 'exact merchOrderId returned');
 check(strpos($checkout->getCheckoutUrl(), 'prepay_id=PID123') !== false, 'checkout URL contains prepay_id');
+
+// ---------------------------------------------------------------------------
+// The transId / trans_id signing mismatch (production merchant 500289)
+// ---------------------------------------------------------------------------
+
+section('SignatureVerifier field aliasing (transId signed as trans_id)');
+$signer = new Signer($notifyConfig);
+
+// Telebirr hashes the transaction id as `trans_id` and puts it on the wire as
+// `transId`. Reproduce exactly that: sign one spelling, send the other.
+$signedShape = $notifyBody;
+$signedShape['trans_id'] = $signedShape['transId'];
+unset($signedShape['transId']);
+
+$onTheWire = $notifyBody;
+$onTheWire['sign'] = $signer->signString(SignatureVerifier::getCanonicalString($signedShape));
+
+check(
+    SignatureVerifier::verify($onTheWire, $publicPem) === true,
+    'a notification signed as trans_id but sent as transId verifies'
+);
+check(
+    NotificationHandler::handle((string) json_encode($onTheWire), $notifyConfig)['isSuccess'] === true,
+    'the same body flows through NotificationHandler::handle()'
+);
+
+// A gateway that names the field consistently must keep working, both ways round.
+$aligned = $notifyBody;
+$aligned['sign'] = $signer->signString(SignatureVerifier::getCanonicalString($notifyBody));
+check(
+    SignatureVerifier::verify($aligned, $publicPem) === true,
+    'a notification signed and sent as transId still verifies (unchanged behaviour)'
+);
+$bothTransId = $signedShape;
+$bothTransId['sign'] = $signer->signString(SignatureVerifier::getCanonicalString($signedShape));
+check(
+    SignatureVerifier::verify($bothTransId, $publicPem) === true,
+    'a notification signed and sent as trans_id verifies'
+);
+
+// Aliasing must never become a way in.
+$tamperedAlias = $onTheWire;
+$tamperedAlias['total_amount'] = '9999.00';
+check(SignatureVerifier::verify($tamperedAlias, $publicPem) === false, 'aliasing does not let a tampered amount through');
+$tamperedId = $onTheWire;
+$tamperedId['transId'] = 'FORGEDXXXX';
+check(SignatureVerifier::verify($tamperedId, $publicPem) === false, 'the aliased field itself cannot be tampered with');
+$garbage = $onTheWire;
+$garbage['sign'] = base64_encode(random_bytes(256));
+check(SignatureVerifier::verify($garbage, $publicPem) === false, 'a garbage signature is still refused');
+
+section('SignatureVerifier signature decoding (URL-mangled base64)');
+
+// `+` is not percent-encoded in Telebirr's return URL, so form decoding turns
+// every one of them into a space.
+$mangled = $aligned;
+$mangled['sign'] = str_replace('+', ' ', $aligned['sign']);
+check(SignatureVerifier::verify($mangled, $publicPem) === true, 'a signature whose + became spaces still verifies');
+
+// The case the old "only if there is no + at all" guard skipped: partially
+// encoded, so a literal + and a mangled space coexist.
+$plusAt = strpos($aligned['sign'], '+');
+if ($plusAt !== false) {
+    $mixed = $aligned;
+    $mixed['sign'] = substr($aligned['sign'], 0, $plusAt + 1)
+        . str_replace('+', ' ', substr($aligned['sign'], $plusAt + 1));
+    check(SignatureVerifier::verify($mixed, $publicPem) === true, 'a partially mangled signature (literal + and spaces) verifies');
+}
+
+// base64_decode() skips whitespace even in strict mode, so the mangled form
+// decodes happily to the wrong, shorter bytes. Guard the assumption the fix
+// rests on: this is why every candidate is tried, not just the first that decodes.
+check(base64_decode('QQ  ==', true) !== false, 'PHP base64_decode strict still accepts whitespace');
+
+$mangledTampered = $mangled;
+$mangledTampered['merch_order_id'] = 'ORDER-FORGED';
+check(SignatureVerifier::verify($mangledTampered, $publicPem) === false, 'repairing the encoding does not excuse a tampered payload');
+
+section('ReturnUrlHandler shape parity with the notify leg');
+
+// Real return-leg parameters: no transaction id, datetime timestamps.
+$returnParams = [
+    'trans_end_time'   => '2026-08-21 17:10:26',
+    'notify_time'      => '2026-08-21 17:10:26',
+    'trans_currency'   => 'ETB',
+    'total_amount'     => '1.00',
+    'merch_order_id'   => 'AFROTESTF62S9L5EJBDUAR',
+    'appid'            => '974630308911301',
+    'trade_status'     => 'PAY_SUCCESS',
+    'merch_code'       => '500289',
+    'notify_url'       => 'https://example.com/notify',
+    'payment_order_id' => '108N11088L17102600001002',
+    'sign_type'        => 'SHA256WithRSA',
+];
+$returnParams['sign'] = $signer->signString(SignatureVerifier::getCanonicalString($returnParams));
+$returned = ReturnUrlHandler::handle($returnParams, $notifyConfig);
+
+$notifyKeys = array_keys(NotificationHandler::extractPaymentInfo($notifyBody));
+$missing = array_diff($notifyKeys, array_keys($returned));
+check($missing === [], 'the return leg returns every key the notify leg does (' . (implode(',', $missing) ?: 'none missing') . ')');
+check($returned['isSuccess'] === true, 'a signed PAY_SUCCESS return reads as success');
+check($returned['transId'] === '', 'transId is empty on the return leg, which carries none');
+check($returned['merchCode'] === '500289' && $returned['appId'] === '974630308911301', 'merchCode and appId surfaced on the return leg');
+check($returned['timestamp'] === '2026-08-21 17:10:26', 'return timestamp preserved verbatim');
+check($returned['timestampUnix'] === null, 'a datetime timestamp yields null rather than a guess');
 
 // ---------------------------------------------------------------------------
 

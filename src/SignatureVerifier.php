@@ -28,6 +28,35 @@ class SignatureVerifier
     ];
 
     /**
+     * Fields Telebirr signs under one name and transmits under another.
+     *
+     * Keyed by the name that arrives on the wire, valued by the name that went
+     * into the hash. Telebirr's own integration guide names the transaction id
+     * `trans_id` in its sample callback; the JSON their gateway actually POSTs
+     * calls it `transId`. They sign the former and send the latter, so a
+     * canonical string built from the keys as received can never match theirs,
+     * and every notification carrying that field is refused.
+     *
+     * The rename breaks verification twice over, which is why no reordering of
+     * the received keys can rescue it: `transId` sorts *before* `trans_currency`
+     * (`I` is 0x49, `_` is 0x5F) while `trans_id` sorts *after* `trans_end_time`.
+     * Wrong name and wrong position from a single substitution.
+     *
+     * Confirmed against production merchant 500289 on 2026-08-21: the notify for
+     * `AFROTESTHGSCFT8BPU8YMB` fails all 8,188 combinations of the received keys
+     * -- every non-empty subset of the 11 fields, times four orderings, times
+     * PSS and PKCS#1 -- and verifies on the first attempt once renamed. The same
+     * payment's return leg verifies untouched, because the return carries no
+     * transaction id at all; that is why this only ever broke the notify leg,
+     * and why it survived a merchant being issued the correct public key.
+     *
+     * @var array<string, string>
+     */
+    private static array $signedFieldAliases = [
+        'transId' => 'trans_id',
+    ];
+
+    /**
      * Verify Telebirr signature from return URL or notification
      * 
      * @param array $params All parameters (including sign and sign_type)
@@ -56,20 +85,11 @@ class SignatureVerifier
             error_log('SignatureVerifier: Signature appears truncated. Length: ' . strlen($signature) . ', Expected ~512 characters. The URL might be too long.');
         }
 
-        // Normalize signature (handle URL encoding issues)
-        $normalizedSignature = self::normalizeSignature($signature);
-
-        // Build canonical string (same process as signing)
-        $canonicalString = self::buildCanonicalString($params);
-
-        // Try verification with the normalized signature first
-        if (self::verifySignature($canonicalString, $normalizedSignature, $telebirrPublicKey)) {
-            return true;
-        }
-
-        // If that fails, try with URL-decoded signature (base64 + becomes space in URLs)
-        $urlDecodedSignature = urldecode($signature);
-        if ($urlDecodedSignature !== $normalizedSignature && self::verifySignature($canonicalString, $urlDecodedSignature, $telebirrPublicKey)) {
+        // Every canonical string Telebirr might have hashed, against every
+        // reading of the signature bytes. verifySignature() handles the
+        // encoding permutations; canonicalStringVariants() handles the field
+        // naming ones.
+        if (self::verifyParams($params, (string) $signature, $telebirrPublicKey)) {
             return true;
         }
 
@@ -81,6 +101,60 @@ class SignatureVerifier
         }
 
         return false;
+    }
+
+    /**
+     * Verify one parameter set against every canonical string Telebirr might have signed.
+     *
+     * @param array $params All parameters (including sign and sign_type)
+     * @param string $signature The signature as received, before any normalization
+     * @param string $publicKey Telebirr's public key in PEM format
+     */
+    private static function verifyParams(array $params, string $signature, string $publicKey): bool
+    {
+        foreach (self::canonicalStringVariants($params) as $canonicalString) {
+            if (self::verifySignature($canonicalString, $signature, $publicKey)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * The canonical strings Telebirr might have hashed for this payload.
+     *
+     * The payload exactly as received comes first, so a gateway that names its
+     * fields consistently costs nothing and nothing here has to change the day
+     * Telebirr aligns the two spellings. Only then is the aliased form tried.
+     *
+     * This widens which *string* is hashed. It never widens *who* may have
+     * signed it -- every variant is checked against the same public key, so
+     * forging any of them still requires Telebirr's private key.
+     *
+     * @param array $params All parameters (including sign and sign_type)
+     * @return array<int, string>
+     */
+    private static function canonicalStringVariants(array $params): array
+    {
+        $variants = [self::buildCanonicalString($params)];
+
+        $aliased = $params;
+        $renamed = false;
+
+        foreach (self::$signedFieldAliases as $sentAs => $signedAs) {
+            if (array_key_exists($sentAs, $aliased) && !array_key_exists($signedAs, $aliased)) {
+                $aliased[$signedAs] = $aliased[$sentAs];
+                unset($aliased[$sentAs]);
+                $renamed = true;
+            }
+        }
+
+        if ($renamed) {
+            $variants[] = self::buildCanonicalString($aliased);
+        }
+
+        return $variants;
     }
 
     /**
@@ -177,9 +251,17 @@ class SignatureVerifier
      */
     public static function normalizeSignature(string $signature): string
     {
-        // If signature contains spaces but no +, spaces should be + (base64 uses + not spaces)
-        // This happens when PHP converts + to spaces in GET parameters
-        if (strpos($signature, ' ') !== false && strpos($signature, '+') === false) {
+        // The base64 alphabet contains no space, so a space in a signature is
+        // always a `+` that URL decoding ate: form-urlencoded maps `+` to space,
+        // and Telebirr sends the raw `+` unencoded in the return URL's query
+        // string rather than as `%2B`.
+        //
+        // This used to substitute only when the signature contained no `+` at
+        // all, which gave up on the one case that actually needs help -- a
+        // partially encoded signature carrying both a literal `+` (from `%2B`)
+        // and a mangled space. Substituting unconditionally is safe precisely
+        // because a space can never be legitimate base64 content.
+        if (strpos($signature, ' ') !== false) {
             $signature = str_replace(' ', '+', $signature);
         }
 
@@ -187,46 +269,57 @@ class SignatureVerifier
     }
 
     /**
-     * Decode base64 signature, handling URL encoding issues
-     * 
-     * @param string $signature The signature string (may be URL-encoded)
-     * @return array{decoded: string, attempt: string}|false Returns array with decoded binary and attempt name on success, false on failure
+     * Every plausible reading of a base64 signature, as raw binary.
+     *
+     * Returns *all* readings rather than the first that decodes, because in PHP
+     * "decodes" is not the same as "decodes correctly". `base64_decode()` skips
+     * whitespace even in strict mode, so a signature whose `+` characters were
+     * turned into spaces still decodes happily -- to shorter, wrong bytes, with
+     * no error to notice. Returning that first reading meant the correct
+     * space-to-plus candidate was never reached, and the caller saw an
+     * indistinguishable "invalid signature".
+     *
+     * Verified on PHP: `base64_decode('QQ  ==', true)` returns a string, not
+     * false. A 512-character mangled signature decodes to 379 bytes where the
+     * repaired one gives 384.
+     *
+     * @param string $signature The signature string (may be URL-encoded or mangled)
+     * @return array<int, string> Distinct decoded binaries, most likely first
      */
-    private static function decodeSignature(string $signature)
+    private static function decodeSignatureCandidates(string $signature): array
     {
-        // Try different decoding approaches
         $attempts = [
-            // 1. As-is (if already properly formatted)
-            ['name' => 'as-is', 'value' => $signature],
-            // 2. Replace spaces with + (common URL encoding issue)
-            ['name' => 'space-to-plus', 'value' => str_replace(' ', '+', $signature)],
+            // 1. Repaired first: a space is always a mangled `+` (see normalizeSignature)
+            str_replace(' ', '+', $signature),
+            // 2. As-is (if already properly formatted)
+            $signature,
             // 3. URL decode first, then fix spaces
-            ['name' => 'url-decode-then-space-fix', 'value' => str_replace(' ', '+', urldecode($signature))],
+            str_replace(' ', '+', urldecode($signature)),
             // 4. URL decode only
-            ['name' => 'url-decode', 'value' => urldecode($signature)],
+            urldecode($signature),
         ];
 
-        foreach ($attempts as $attempt) {
-            $attemptValue = $attempt['value'];
+        $decoded = [];
 
-            // Try to decode
-            $decoded = base64_decode($attemptValue, true);
-            if ($decoded !== false && strlen($decoded) > 0) {
-                return ['decoded' => $decoded, 'attempt' => $attempt['name']];
+        foreach ($attempts as $attempt) {
+            $candidates = [$attempt];
+
+            // Padding is sometimes lost in transit; try restoring it too.
+            $paddingNeeded = 4 - (strlen($attempt) % 4);
+            if ($paddingNeeded !== 4) {
+                $candidates[] = $attempt . str_repeat('=', $paddingNeeded);
             }
 
-            // If padding might be missing, try adding it
-            $paddingNeeded = 4 - (strlen($attemptValue) % 4);
-            if ($paddingNeeded !== 4) {
-                $attemptWithPadding = $attemptValue . str_repeat('=', $paddingNeeded);
-                $decoded = base64_decode($attemptWithPadding, true);
-                if ($decoded !== false && strlen($decoded) > 0) {
-                    return ['decoded' => $decoded, 'attempt' => $attempt['name'] . ' (with padding)'];
+            foreach ($candidates as $candidate) {
+                $binary = base64_decode($candidate, true);
+
+                if ($binary !== false && $binary !== '' && !in_array($binary, $decoded, true)) {
+                    $decoded[] = $binary;
                 }
             }
         }
 
-        return false;
+        return $decoded;
     }
 
     /**
@@ -241,20 +334,18 @@ class SignatureVerifier
      */
     private static function verifySignature(string $data, string $signature, string $publicKey): bool
     {
-        $decodeResult = self::decodeSignature($signature);
+        $candidates = self::decodeSignatureCandidates($signature);
 
-        if ($decodeResult === false) {
+        if ($candidates === []) {
             $errorDetails = [
                 'Signature length: ' . strlen($signature),
                 'First 50 chars: ' . substr($signature, 0, 50),
                 'Canonical string length: ' . strlen($data),
-                'Decoding attempts: All failed (as-is, space-to-plus, url-decode-then-space-fix, url-decode)',
+                'Decoding attempts: All failed (space-to-plus, as-is, url-decode-then-space-fix, url-decode)',
             ];
             error_log('SignatureVerifier: Failed to decode base64 signature. ' . implode(', ', $errorDetails));
             return false;
         }
-
-        $signatureBinary = $decodeResult['decoded'];
 
         /** @var \phpseclib3\Crypt\RSA\PublicKey $pub */
         $pub = \phpseclib3\Crypt\PublicKeyLoader::load($publicKey);
@@ -263,7 +354,16 @@ class SignatureVerifier
             ->withMGFHash('sha256')
             ->withSaltLength(32);
 
-        return $pub->verify($data, $signatureBinary);
+        // Every reading is checked against the same key, so trying several
+        // widens which bytes we are willing to call the signature, never who
+        // is allowed to have produced them.
+        foreach ($candidates as $signatureBinary) {
+            if ($pub->verify($data, $signatureBinary)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -291,11 +391,7 @@ class SignatureVerifier
             return false;
         }
 
-        // Build canonical string from parsed params
-        $canonicalString = self::buildCanonicalString($params);
-
-        // Verify signature
-        return self::verifySignature($canonicalString, $params['sign'], $telebirrPublicKey);
+        return self::verifyParams($params, (string) $params['sign'], $telebirrPublicKey);
     }
 
     /**
