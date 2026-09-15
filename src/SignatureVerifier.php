@@ -258,12 +258,21 @@ class SignatureVerifier
 
         /** @var \phpseclib3\Crypt\RSA\PublicKey $pub */
         $pub = \phpseclib3\Crypt\PublicKeyLoader::load($publicKey);
-        $pub = $pub->withPadding(\phpseclib3\Crypt\RSA::SIGNATURE_PSS)
+
+        // Try PKCS#1 v1.5 first (SHA256WithRSA — what Telebirr actually uses)
+        $v15 = $pub->withPadding(\phpseclib3\Crypt\RSA::SIGNATURE_PKCS1)
+            ->withHash('sha256');
+        if ($v15->verify($data, $signatureBinary)) {
+            return true;
+        }
+
+        // Fallback: RSA-PSS (some implementations use this)
+        $pss = $pub->withPadding(\phpseclib3\Crypt\RSA::SIGNATURE_PSS)
             ->withHash('sha256')
             ->withMGFHash('sha256')
             ->withSaltLength(32);
 
-        return $pub->verify($data, $signatureBinary);
+        return $pss->verify($data, $signatureBinary);
     }
 
     /**
