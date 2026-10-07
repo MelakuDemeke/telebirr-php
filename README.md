@@ -2,7 +2,7 @@
     <img src="img/telebirrlogo.png" alt="Telebirr" title="Aimeos" align="right" height="60" />
 </a>
 
-# Telebirr PHP Library (Web Checkout)
+# Telebirr PHP Library (Web Checkout & In-App SDK)
 ![](img/telebanner.png)
 
 ![GitHub branch checks state](https://img.shields.io/github/checks-status/MelakuDemeke/telebirr-php/main)
@@ -16,7 +16,7 @@
 ![GitHub commit activity](https://img.shields.io/github/commit-activity/m/MelakuDemeke/telebirr-php?logo=github)
 ![GitHub last commit](https://img.shields.io/github/last-commit/MelakuDemeke/telebirr-php)
 
-A modern PHP library for integrating **Telebirr Web Checkout (C2B)** payments. Telebirr is a mobile money service developed by Huawei and owned by Ethio telecom.
+A modern PHP library for integrating **Telebirr Web Checkout (C2B)** payments, and the server side of **Telebirr In-App SDK** payments for mobile apps. Telebirr is a mobile money service developed by Huawei and owned by Ethio telecom.
 
 This library provides a simple, easy-to-use API for handling Telebirr payments, fully compliant with the [Telebirr H5 C2B Web Payment Integration Guide](https://developer.ethiotelecom.et/docs/H5%20C2B%20Web%20Payment%20Integration%20Quick%20Guide/requestCreateOrder).
 
@@ -73,8 +73,9 @@ That's it! The library handles token management, order creation, and checkout UR
 
 If your mobile app's Telebirr SDK initiates the payment instead of a browser
 redirect, use `createInAppPayment()`. There's no checkout URL for this flow — the
-`receiveCode` must be passed to the mobile SDK to continue the payment. This is
-the whole body of your app's "create order" endpoint:
+`receiveCode` must be passed to the mobile SDK (native Android/iOS, or a Flutter
+plugin wrapping them) to continue the payment. This is the whole body of your
+app's "create order" endpoint:
 
 ```php
 // POST /api/create-payment
@@ -91,9 +92,22 @@ echo json_encode($result->toArray()); // { receiveCode, merchOrderId, prepayId }
 Token management (with caching) is handled for you, as in `createCheckoutUrl()`.
 A runnable endpoint is in [`examples/inapp_create_order.php`](examples/inapp_create_order.php).
 
+The rest of the flow is the same as web checkout: Telebirr POSTs the signed
+notification to your `notifyUrl` (see [Handle Payment Notifications](#handle-payment-notifications)),
+and `getOrderStatus($result->getMerchOrderId())` confirms the payment
+server-to-server. The result the mobile SDK hands your app is only a hint — it
+can be missing (an expired Telebirr session returns nothing) or wrong, so never
+fulfil on it alone.
+
 Need the raw response or your own token handling? The lower-level
 `createInAppOrder($fabricToken, $title, $amount)` is still available and returns
 the full API response, with the code at `$order['biz_content']['receiveCode']`.
+
+> **Upgrade to 2.5.0 if you create in-app orders.** 2.4.0 and earlier sent
+> `trade_type: "InApp"`. The gateway accepts it and returns a `receiveCode`, but
+> the Telebirr app then refuses the order with *"The trade type is not filled
+> in, or it is incorrect"*. 2.5.0 sends `"Cross-App"`, confirmed with a paid
+> order on the testbed.
 
 ## 📋 Configuration
 
@@ -157,6 +171,7 @@ Default endpoints used by the library:
 ## 💡 Key Features
 
 - ✅ **Simple API** - One-call checkout (`createCheckoutUrl`) and one-call verification (`getOrderStatus`)
+- ✅ **In-App SDK orders** - One call (`createInAppPayment`) returns the `receiveCode` your mobile app hands to the Telebirr SDK
 - ✅ **Automatic Token Management** - Fabric tokens are fetched, cached until expiry, and refreshed for you
 - ✅ **Key normalization** - Bare base64 keys (as Ethio Telecom issues them) or PEM, both just work
 - ✅ **TLS that just works** - Falls back to a bundled Telebirr CA chain when the test gateway's incomplete chain fails the system store; no `verifySsl => false` needed
@@ -164,7 +179,7 @@ Default endpoints used by the library:
 - ✅ **Signature Verification** - Built-in helpers for return URLs and notifications
 - ✅ **Helper Classes** - `ReturnUrlHandler`, `NotificationHandler`, `PaymentStatus`
 - ✅ **Environment Support** - Automatic test/production URL handling
-- ✅ **Full Compliance** - Follows Telebirr H5 C2B Web Payment Integration spec
+- ✅ **Full Compliance** - Follows Telebirr H5 C2B Web Payment Integration spec; in-app orders verified against the testbed
 
 ## 📖 Common Use Cases
 
@@ -615,8 +630,10 @@ This project is licensed under the MIT License.
 
 - [Telebirr Developer Portal](https://developer.ethiotelecom.et/)
 - [Telebirr H5 C2B Integration Guide](https://developer.ethiotelecom.et/docs/H5%20C2B%20Web%20Payment%20Integration%20Quick%20Guide/requestCreateOrder)
+- [Telebirr In-App SDK Integration Guide](https://developer.ethiotelecom.et/docs/In%20App%20SDK%20Integration/Introduction)
 - [Packagist](https://packagist.org/packages/melaku/telebirr)
 - [GitHub Repository](https://github.com/MelakuDemeke/telebirr-php)
+- Looking for a Node.js/TypeScript integration? See [telebirr-js](https://github.com/MelakuDemeke/telebirr-js)
 
 ---
 
