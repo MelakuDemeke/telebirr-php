@@ -72,20 +72,28 @@ That's it! The library handles token management, order creation, and checkout UR
 ### In-App SDK Payment
 
 If your mobile app's Telebirr SDK initiates the payment instead of a browser
-redirect, use `createInAppOrder()`. There's no checkout URL for this flow — the
-response's `receiveCode` must be passed to the mobile SDK to continue the payment.
+redirect, use `createInAppPayment()`. There's no checkout URL for this flow — the
+`receiveCode` must be passed to the mobile SDK to continue the payment. This is
+the whole body of your app's "create order" endpoint:
 
 ```php
-$tokenInfo   = $client->applyFabricToken();
-$fabricToken = $tokenInfo['token'];
+// POST /api/create-payment
+$result = $client->createInAppPayment('Order 123', '100.00');
 
-$order = $client->createInAppOrder($fabricToken, 'Order 123', '100.00');
-$receiveCode = $order['biz_content']['receiveCode'];
+// Persist this BEFORE answering. It's how you match the notification.
+saveOrder($result->getMerchOrderId(), $result->getPrepayId());
 
 // Send the receiveCode to your mobile app for the SDK to complete the payment.
 header('Content-Type: application/json');
-echo json_encode(['receiveCode' => $receiveCode]);
+echo json_encode($result->toArray()); // { receiveCode, merchOrderId, prepayId }
 ```
+
+Token management (with caching) is handled for you, as in `createCheckoutUrl()`.
+A runnable endpoint is in [`examples/inapp_create_order.php`](examples/inapp_create_order.php).
+
+Need the raw response or your own token handling? The lower-level
+`createInAppOrder($fabricToken, $title, $amount)` is still available and returns
+the full API response, with the code at `$order['biz_content']['receiveCode']`.
 
 ## 📋 Configuration
 

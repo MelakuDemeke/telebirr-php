@@ -274,7 +274,7 @@ class Telebirr
 	}
 
 	/**
-	 * Request create order (createOrder) for the In-App SDK flow – trade_type "InApp".
+	 * Request create order (createOrder) for the In-App SDK flow – trade_type "Cross-App".
 	 *
 	 * Used when a mobile app's Telebirr SDK initiates the payment. Unlike the web
 	 * checkout flow, there is no checkout URL: the response's `receiveCode` must be
@@ -483,6 +483,37 @@ class Telebirr
 		$checkoutUrl = $this->buildCheckoutUrl($prepayId);
 
 		return new CheckoutResult($checkoutUrl, $merchOrderId, $prepayId);
+	}
+
+	/**
+	 * High-level helper for the In-App SDK flow: applyFabricToken + createInAppOrder.
+	 *
+	 * This is the whole body of a mobile app's "create order" endpoint: call it,
+	 * persist the merch_order_id, and return the receiveCode to the app, which
+	 * passes it to the Telebirr SDK. Token management (with caching) is handled
+	 * for you, as in createCheckoutUrl().
+	 *
+	 * @param string $title Order title (auto-sanitized)
+	 * @param string|int|float $amount Total amount (ETB)
+	 * @param string|null $merchOrderId Optional merchant order ID (^[A-Za-z0-9]+$). Generated if null.
+	 *        Invalid ids throw rather than being silently rewritten.
+	 *
+	 * @return InAppOrderResult { receiveCode, merchOrderId, prepayId }
+	 * @throws ApiException on API errors
+	 * @throws InvalidParameterException on parameter validation failures
+	 */
+	public function createInAppPayment(string $title, $amount, ?string $merchOrderId = null): InAppOrderResult
+	{
+		// Resolve the id up-front (generate if null, throw if invalid) so we can
+		// report back the EXACT value Telebirr will use.
+		$merchOrderId = ParameterValidator::validateMerchantOrderId($merchOrderId, false);
+
+		$fabricToken = $this->getFabricToken();
+		$order = $this->createInAppOrder($fabricToken, $title, $amount, $merchOrderId);
+		$biz = $order['biz_content'];
+		$prepayId = isset($biz['prepay_id']) && $biz['prepay_id'] !== '' ? (string) $biz['prepay_id'] : null;
+
+		return new InAppOrderResult((string) $biz['receiveCode'], $merchOrderId, $prepayId);
 	}
 
 	/**
@@ -738,7 +769,7 @@ class Telebirr
 	}
 
 	/**
-	 * Internal: build the In-App SDK createOrder request body (trade_type "InApp").
+	 * Internal: build the In-App SDK createOrder request body (trade_type "Cross-App").
 	 */
 	private function buildInAppOrderRequest(string $title, string $amount, string $merchOrderId): array
 	{
@@ -754,7 +785,10 @@ class Telebirr
 			'appid'           => $this->config->merchantAppId,
 			'merch_code'      => $this->config->merchantCode,
 			'merch_order_id'  => $merchOrderId,
-			'trade_type'      => 'InApp',
+			// "Cross-App", not "InApp": the Telebirr app refuses an InApp order opened
+			// by the mobile SDK ("The trade type is not filled in, or it is incorrect").
+			// Confirmed on the testbed with merchant 192411 on 2026-10-07.
+			'trade_type'      => 'Cross-App',
 			'title'           => $title,
 			'total_amount'    => $amount,
 			'trans_currency'  => 'ETB',

@@ -3,6 +3,31 @@
 All notable changes to `melaku/telebirr` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [2.5.0] — 2026-10-07
+
+One-call order creation for the In-App SDK flow, and a fix that makes in-app
+orders payable. No signature changes.
+
+### Fixed
+- **In-App orders are now created with `trade_type: "Cross-App"`.** They were
+  sent as `"InApp"`, which the gateway accepts and answers with a `receiveCode`
+  — but the Telebirr app then refuses to open that order from the mobile SDK,
+  showing *"The trade type is not filled in, or it is incorrect"* on an empty
+  payment screen. So `createInAppOrder()` in 2.4.0 and earlier returned a code
+  no customer could pay. `"InApp"` is for mini apps running inside Telebirr; a
+  stand-alone app using the SDK is `"Cross-App"`. Confirmed on the testbed with
+  merchant 192411 on 2026-10-07. `business_type` is not required.
+
+### Added
+- **`Telebirr::createInAppPayment($title, $amount, $merchOrderId = null)`** —
+  the In-App counterpart of `createCheckoutUrl()`. It fetches (and caches) the
+  fabric token, creates the in-app order and returns an `InAppOrderResult`
+  with `getReceiveCode()`, `getMerchOrderId()`, `getPrepayId()` and `toArray()`.
+  This is the whole body of a mobile app's "create order" endpoint: return
+  `toArray()` as JSON and the app hands the `receiveCode` to the Telebirr SDK.
+- **`examples/inapp_create_order.php`** — a runnable endpoint that accepts
+  `{title, amount}` and answers `{receiveCode, merchOrderId, prepayId}`.
+
 ## [2.4.0] — 2026-08-21
 
 Signature verification, corrected against a live production notification from

@@ -466,6 +466,43 @@ check($checkout->getMerchOrderId() === 'ORDER123', 'exact merchOrderId returned'
 check(strpos($checkout->getCheckoutUrl(), 'prepay_id=PID123') !== false, 'checkout URL contains prepay_id');
 
 // ---------------------------------------------------------------------------
+// createInAppPayment: token + in-app order in one call
+// ---------------------------------------------------------------------------
+
+section('createInAppPayment (In-App SDK full flow)');
+$http = new FakeHttpClient([
+    tokenResponse(),
+    new HttpResponse(200, json_encode(['code' => '0', 'biz_content' => [
+        'merch_order_id' => 'ORDER123',
+        'prepay_id'      => 'PID123',
+        'receiveCode'    => 'TELEBIRR$BUYGOODS$123456$100.00$PID123$120m',
+    ]])),
+]);
+$client = new Telebirr(Config::forTest(baseOptions($pemPrivateKey)), null, $http);
+$inApp = $client->createInAppPayment('Order 123', '100.00', 'ORDER123');
+check($inApp->getReceiveCode() === 'TELEBIRR$BUYGOODS$123456$100.00$PID123$120m', 'receiveCode returned unchanged');
+check($inApp->getMerchOrderId() === 'ORDER123', 'exact merchOrderId returned');
+check($inApp->getPrepayId() === 'PID123', 'prepayId returned');
+check(count($http->calls) === 2, 'one token call and one order call');
+check(substr($http->calls[1]['url'], -29) === '/payment/v1/inapp/createOrder', 'order goes to the in-app endpoint');
+$sent = json_decode($http->calls[1]['body'], true);
+check($sent['biz_content']['trade_type'] === 'Cross-App', 'trade_type is Cross-App');
+check($sent['biz_content']['merch_order_id'] === 'ORDER123', 'merch_order_id sent as given');
+check(
+    $inApp->toArray() === ['receiveCode' => $inApp->getReceiveCode(), 'merchOrderId' => 'ORDER123', 'prepayId' => 'PID123'],
+    'toArray() exposes all three fields'
+);
+
+$http = new FakeHttpClient([
+    tokenResponse(),
+    new HttpResponse(200, json_encode(['code' => '0', 'biz_content' => ['receiveCode' => 'RC1']])),
+]);
+$client = new Telebirr(Config::forTest(baseOptions($pemPrivateKey)), null, $http);
+$inApp = $client->createInAppPayment('Order', 10);
+check($inApp->getPrepayId() === null, 'prepayId is null when the gateway omits it');
+check(preg_match('/^[A-Za-z0-9]+$/', $inApp->getMerchOrderId()) === 1, 'a valid merchOrderId is generated when none is given');
+
+// ---------------------------------------------------------------------------
 // The transId / trans_id signing mismatch (production merchant 500289)
 // ---------------------------------------------------------------------------
 
