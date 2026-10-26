@@ -472,7 +472,7 @@ $http = new FakeHttpClient([new HttpResponse(200, json_encode(['code' => '00000'
 $client = new Telebirr(Config::forTest(baseOptions($pemPrivateKey)), null, $http);
 $client->createOrder('Bearer abc', 'Order', '10.00', 'ORDER123');
 $biz = json_decode($http->calls[0]['body'], true)['biz_content'];
-check($biz['payee_type'] === '3000', 'payee_type is 3000 (organization operator)');
+check($biz['payee_type'] === '5000', 'payee_type is 5000 (production refuses 3000 with 60320019)');
 check($biz['payee_identifier'] === baseOptions($pemPrivateKey)['merchantCode'], 'payee_identifier is the merchant short code');
 check($biz['payee_identifier_type'] === '04', 'payee_identifier_type is 04 (short code)');
 check(!isset($biz['payer_type']) && !isset($biz['payer_identifier']) && !isset($biz['payer_identifier_type']), 'no payer fields without a phone');
@@ -481,7 +481,7 @@ $http = new FakeHttpClient([new HttpResponse(200, json_encode(['code' => '0', 'b
 $client = new Telebirr(Config::forTest(baseOptions($pemPrivateKey)), null, $http);
 $client->createInAppOrder('Bearer abc', 'Order', '10.00', 'ORDER123', '+251 989 000 032');
 $biz = json_decode($http->calls[0]['body'], true)['biz_content'];
-check($biz['payee_type'] === '3000' && $biz['payee_identifier_type'] === '04', 'in-app order carries payee fields too');
+check($biz['payee_type'] === '5000' && $biz['payee_identifier_type'] === '04', 'in-app order carries payee fields too');
 check($biz['payer_type'] === '1000', 'payer_type is 1000 (customer)');
 check($biz['payer_identifier'] === '251989000032', 'payer_identifier is the normalized phone');
 check($biz['payer_identifier_type'] === '01', 'payer_identifier_type is 01 (telebirr user)');

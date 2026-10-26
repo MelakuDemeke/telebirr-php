@@ -764,8 +764,12 @@ class Telebirr
 			'total_amount'    => $amount,
 			'trans_currency'  => 'ETB',
 			'timeout_express' => '120m',
-			// Who receives the money: our organization, paid through its short code.
-			'payee_type'            => '3000',
+			// Who receives the money: the merchant organization, paid through its
+			// short code. '5000', not the '3000' in the spec's parameter table:
+			// telebirr production refuses 3000 with 60320019 "The identity
+			// information is illegal." and accepts 5000, the value telebirr's own
+			// sample code sends (verified live, merchant 600980, 2026-10-27).
+			'payee_type'            => '5000',
 			'payee_identifier'      => $this->config->merchantCode,
 			'payee_identifier_type' => '04',
 		];
@@ -810,8 +814,12 @@ class Telebirr
 			'total_amount'    => $amount,
 			'trans_currency'  => 'ETB',
 			'timeout_express' => '120m',
-			// Who receives the money: our organization, paid through its short code.
-			'payee_type'            => '3000',
+			// Who receives the money: the merchant organization, paid through its
+			// short code. '5000', not the '3000' in the spec's parameter table:
+			// telebirr production refuses 3000 with 60320019 "The identity
+			// information is illegal." and accepts 5000, the value telebirr's own
+			// sample code sends (verified live, merchant 600980, 2026-10-27).
+			'payee_type'            => '5000',
 			'payee_identifier'      => $this->config->merchantCode,
 			'payee_identifier_type' => '04',
 		];

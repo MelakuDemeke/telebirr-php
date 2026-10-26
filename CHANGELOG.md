@@ -3,6 +3,17 @@
 All notable changes to `melaku/telebirr` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [2.6.1] — 2026-10-27
+
+### Fixed
+- **Every create order was refused in production** with `60320019` "The
+  identity information is illegal." 2.6.0 sent `payee_type: "3000"`, the value
+  in the requestCreateOrder parameter table; telebirr production only accepts
+  **`"5000"`**, the value telebirr's own sample code sends. Verified live
+  (merchant 600980, 2026-10-27): no payee fields — accepted; `3000` — refused
+  60320019; `5000` — accepted. Upgrade from 2.6.0 is required; 2.5.x is not
+  affected (it sent no payee fields).
+
 ## [2.6.0] — 2026-10-26
 
 Payee and payer identity fields on create order, as requested by the Telebirr

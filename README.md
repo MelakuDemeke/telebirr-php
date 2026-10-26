@@ -69,7 +69,7 @@ That's it! The library handles token management, order creation, and checkout UR
 > throw an `InvalidParameterException` instead of being silently rewritten. Pass
 > `null` to have a valid id generated for you, and read it back from the result.
 
-> **Payee and payer (2.6.0+):** every order carries `payee_type` `"3000"`,
+> **Payee and payer (2.6.1+):** every order carries `payee_type` `"5000"`,
 > `payee_identifier` (your `merchantCode`) and `payee_identifier_type` `"04"`.
 > If you know the customer's telebirr number, pass it as the last argument —
 > `$client->createCheckoutUrl('Order 123', '100.00', null, '0911223344')` — and
