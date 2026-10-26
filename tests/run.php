@@ -13,12 +13,14 @@ require __DIR__ . '/../vendor/autoload.php';
 
 use Melaku\Telebirr\Config;
 use Melaku\Telebirr\Exceptions\ApiException;
+use Melaku\Telebirr\Exceptions\InvalidParameterException;
 use Melaku\Telebirr\Exceptions\TelebirrException;
 use Melaku\Telebirr\Http\HttpClientException;
 use Melaku\Telebirr\Http\HttpClientInterface;
 use Melaku\Telebirr\Http\HttpResponse;
 use Melaku\Telebirr\KeyNormalizer;
 use Melaku\Telebirr\NotificationHandler;
+use Melaku\Telebirr\ParameterValidator;
 use Melaku\Telebirr\PaymentStatus;
 use Melaku\Telebirr\ReturnUrlHandler;
 use Melaku\Telebirr\SignatureVerifier;
@@ -464,6 +466,37 @@ $client = new Telebirr(Config::forTest(baseOptions($pemPrivateKey)), null, $http
 $checkout = $client->createCheckoutUrl('Order 123', '100.00', 'ORDER123');
 check($checkout->getMerchOrderId() === 'ORDER123', 'exact merchOrderId returned');
 check(strpos($checkout->getCheckoutUrl(), 'prepay_id=PID123') !== false, 'checkout URL contains prepay_id');
+
+section('payee / payer fields on create order');
+$http = new FakeHttpClient([new HttpResponse(200, json_encode(['code' => '00000', 'biz_content' => ['prepay_id' => 'PID123']]))]);
+$client = new Telebirr(Config::forTest(baseOptions($pemPrivateKey)), null, $http);
+$client->createOrder('Bearer abc', 'Order', '10.00', 'ORDER123');
+$biz = json_decode($http->calls[0]['body'], true)['biz_content'];
+check($biz['payee_type'] === '3000', 'payee_type is 3000 (organization operator)');
+check($biz['payee_identifier'] === baseOptions($pemPrivateKey)['merchantCode'], 'payee_identifier is the merchant short code');
+check($biz['payee_identifier_type'] === '04', 'payee_identifier_type is 04 (short code)');
+check(!isset($biz['payer_type']) && !isset($biz['payer_identifier']) && !isset($biz['payer_identifier_type']), 'no payer fields without a phone');
+
+$http = new FakeHttpClient([new HttpResponse(200, json_encode(['code' => '0', 'biz_content' => ['receiveCode' => 'RC1']]))]);
+$client = new Telebirr(Config::forTest(baseOptions($pemPrivateKey)), null, $http);
+$client->createInAppOrder('Bearer abc', 'Order', '10.00', 'ORDER123', '+251 989 000 032');
+$biz = json_decode($http->calls[0]['body'], true)['biz_content'];
+check($biz['payee_type'] === '3000' && $biz['payee_identifier_type'] === '04', 'in-app order carries payee fields too');
+check($biz['payer_type'] === '1000', 'payer_type is 1000 (customer)');
+check($biz['payer_identifier'] === '251989000032', 'payer_identifier is the normalized phone');
+check($biz['payer_identifier_type'] === '01', 'payer_identifier_type is 01 (telebirr user)');
+
+foreach (['0989000032' => '251989000032', '989000032' => '251989000032', '251712345678' => '251712345678'] as $in => $out) {
+    check(ParameterValidator::validatePayerPhone((string) $in) === $out, "phone {$in} normalizes to {$out}");
+}
+foreach (['', '0111234567', '12345'] as $bad) {
+    try {
+        ParameterValidator::validatePayerPhone($bad);
+        check(false, "phone '{$bad}' rejected");
+    } catch (InvalidParameterException $e) {
+        check(true, "phone '{$bad}' rejected");
+    }
+}
 
 // ---------------------------------------------------------------------------
 // createInAppPayment: token + in-app order in one call

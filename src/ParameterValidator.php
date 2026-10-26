@@ -231,6 +231,39 @@ class ParameterValidator
     }
 
     /**
+     * Normalize a customer's telebirr phone number to the 2519XXXXXXXX /
+     * 2517XXXXXXXX form Telebirr expects in payer_identifier.
+     *
+     * Accepts 0911223344, 911223344, +251911223344, 251911223344
+     * (spaces and dashes ignored). Anything else throws.
+     *
+     * @param string $phone Customer phone number
+     * @return string Normalized number, e.g. 251911223344
+     * @throws InvalidParameterException if it is not an Ethiopian mobile number
+     */
+    public static function validatePayerPhone(string $phone): string
+    {
+        $digits = ltrim(preg_replace('/[\s-]/', '', $phone), '+');
+        $normalized = $digits;
+        if (preg_match('/^0[79]\d{8}$/', $digits)) {
+            $normalized = '251' . substr($digits, 1);
+        } elseif (preg_match('/^[79]\d{8}$/', $digits)) {
+            $normalized = '251' . $digits;
+        }
+
+        if (!preg_match('/^251[79]\d{8}$/', $normalized)) {
+            throw new InvalidParameterException(
+                'payerPhone',
+                $phone,
+                'Payer phone must be an Ethiopian mobile number',
+                "Use a number like '0911223344' or '251911223344'"
+            );
+        }
+
+        return $normalized;
+    }
+
+    /**
      * Generate a valid merchant order ID
      * 
      * Format: timestamp + random number + random alphanumeric string

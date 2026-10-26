@@ -3,6 +3,29 @@
 All notable changes to `melaku/telebirr` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [2.6.0] — 2026-10-26
+
+Payee and payer identity fields on create order, as requested by the Telebirr
+team (requestCreateOrder spec). Backwards compatible: the new argument is
+optional.
+
+### Added
+- **Payee fields on every order.** `createOrder()`, `createInAppOrder()` and
+  the helpers built on them now send `payee_type: "3000"` (organization
+  operator), `payee_identifier` (your `merchantCode`) and
+  `payee_identifier_type: "04"` (paid through the short code).
+- **Optional `$payerPhone` argument** on `createCheckoutUrl()`,
+  `createInAppPayment()`, `createOrder()` and `createInAppOrder()`. When given,
+  `payer_type: "1000"`, `payer_identifier` and `payer_identifier_type: "01"` are
+  sent. Leave it out if you are not sure which telebirr account the customer
+  will pay from.
+- **`ParameterValidator::validatePayerPhone()`** normalizes `0911…`, `911…`,
+  `+251 911…` and `2519…` to `2519XXXXXXXX` (also `2517…`) and throws
+  `InvalidParameterException` for anything else.
+
+### Changed
+- `payer_identifier` is redacted in logged request data.
+
 ## [2.5.0] — 2026-10-07
 
 One-call order creation for the In-App SDK flow, and a fix that makes in-app

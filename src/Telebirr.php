@@ -229,12 +229,14 @@ class Telebirr
 	 * @param string|null $merchOrderId Optional merchant order ID; must be alphanumeric
 	 *        (^[A-Za-z0-9]+$). If null, one is generated. Invalid ids throw — they are NOT
 	 *        silently rewritten (Telebirr would otherwise strip characters and break lookups).
+	 * @param string|null $payerPhone Optional customer telebirr number (0911…, +2519…). When given,
+	 *        payer_type / payer_identifier / payer_identifier_type are sent.
 	 *
 	 * @return array Full API response (contains biz_content.prepay_id on success)
 	 * @throws ApiException on API errors, invalid responses, or missing prepay_id
 	 * @throws InvalidParameterException on parameter validation failures
 	 */
-	public function createOrder(string $fabricToken, string $title, $amount, ?string $merchOrderId = null): array
+	public function createOrder(string $fabricToken, string $title, $amount, ?string $merchOrderId = null, ?string $payerPhone = null): array
 	{
 		// Validate parameters. The order id fails loud on invalid input (autoSanitize = false);
 		// the title is a display string, so it is sanitized to the allowed charset.
@@ -242,6 +244,7 @@ class Telebirr
 			$title = ParameterValidator::validateTitle($title, true);
 			$amount = ParameterValidator::validateAmount($amount);
 			$merchOrderId = ParameterValidator::validateMerchantOrderId($merchOrderId, false);
+			$payerPhone = ($payerPhone !== null && $payerPhone !== '') ? ParameterValidator::validatePayerPhone($payerPhone) : null;
 		} catch (InvalidParameterException $e) {
 			$this->logger->error('Parameter validation failed in createOrder', [
 				'parameter' => $e->getParameterName(),
@@ -251,7 +254,7 @@ class Telebirr
 			throw $e;
 		}
 
-		$reqObject = $this->buildPreOrderRequest($title, $amount, $merchOrderId);
+		$reqObject = $this->buildPreOrderRequest($title, $amount, $merchOrderId, $payerPhone);
 		$url = $this->config->baseUrl . '/payment/v1/merchant/preOrder';
 
 		$result = $this->sendApiRequest('createOrder', $url, $reqObject, $fabricToken);
@@ -286,17 +289,20 @@ class Telebirr
 	 * @param string|null $merchOrderId Optional merchant order ID; must be alphanumeric
 	 *        (^[A-Za-z0-9]+$). If null, one is generated. Invalid ids throw — they are NOT
 	 *        silently rewritten.
+	 * @param string|null $payerPhone Optional customer telebirr number (0911…, +2519…). When given,
+	 *        payer_type / payer_identifier / payer_identifier_type are sent.
 	 *
 	 * @return array Full API response (contains biz_content.receiveCode on success)
 	 * @throws ApiException on API errors, invalid responses, or missing receiveCode
 	 * @throws InvalidParameterException on parameter validation failures
 	 */
-	public function createInAppOrder(string $fabricToken, string $title, $amount, ?string $merchOrderId = null): array
+	public function createInAppOrder(string $fabricToken, string $title, $amount, ?string $merchOrderId = null, ?string $payerPhone = null): array
 	{
 		try {
 			$title = ParameterValidator::validateTitle($title, true);
 			$amount = ParameterValidator::validateAmount($amount);
 			$merchOrderId = ParameterValidator::validateMerchantOrderId($merchOrderId, false);
+			$payerPhone = ($payerPhone !== null && $payerPhone !== '') ? ParameterValidator::validatePayerPhone($payerPhone) : null;
 		} catch (InvalidParameterException $e) {
 			$this->logger->error('Parameter validation failed in createInAppOrder', [
 				'parameter' => $e->getParameterName(),
@@ -306,7 +312,7 @@ class Telebirr
 			throw $e;
 		}
 
-		$reqObject = $this->buildInAppOrderRequest($title, $amount, $merchOrderId);
+		$reqObject = $this->buildInAppOrderRequest($title, $amount, $merchOrderId, $payerPhone);
 		$url = $this->config->baseUrl . '/payment/v1/inapp/createOrder';
 
 		$result = $this->sendApiRequest('createInAppOrder', $url, $reqObject, $fabricToken);
@@ -466,19 +472,21 @@ class Telebirr
 	 * @param string|int|float $amount Total amount (ETB)
 	 * @param string|null $merchOrderId Optional merchant order ID (^[A-Za-z0-9]+$). Generated if null.
 	 *        Invalid ids throw rather than being silently rewritten.
+	 * @param string|null $payerPhone Optional customer telebirr number (0911…, +2519…). When given,
+	 *        payer_type / payer_identifier / payer_identifier_type are sent.
 	 *
 	 * @return CheckoutResult { checkoutUrl, merchOrderId, prepayId }
 	 * @throws ApiException on API errors
 	 * @throws InvalidParameterException on parameter validation failures
 	 */
-	public function createCheckoutUrl(string $title, $amount, ?string $merchOrderId = null): CheckoutResult
+	public function createCheckoutUrl(string $title, $amount, ?string $merchOrderId = null, ?string $payerPhone = null): CheckoutResult
 	{
 		// Resolve the id up-front (generate if null, throw if invalid) so we can
 		// report back the EXACT value Telebirr will use.
 		$merchOrderId = ParameterValidator::validateMerchantOrderId($merchOrderId, false);
 
 		$fabricToken = $this->getFabricToken();
-		$order = $this->createOrder($fabricToken, $title, $amount, $merchOrderId);
+		$order = $this->createOrder($fabricToken, $title, $amount, $merchOrderId, $payerPhone);
 		$prepayId = $order['biz_content']['prepay_id'];
 		$checkoutUrl = $this->buildCheckoutUrl($prepayId);
 
@@ -497,19 +505,21 @@ class Telebirr
 	 * @param string|int|float $amount Total amount (ETB)
 	 * @param string|null $merchOrderId Optional merchant order ID (^[A-Za-z0-9]+$). Generated if null.
 	 *        Invalid ids throw rather than being silently rewritten.
+	 * @param string|null $payerPhone Optional customer telebirr number (0911…, +2519…). When given,
+	 *        payer_type / payer_identifier / payer_identifier_type are sent.
 	 *
 	 * @return InAppOrderResult { receiveCode, merchOrderId, prepayId }
 	 * @throws ApiException on API errors
 	 * @throws InvalidParameterException on parameter validation failures
 	 */
-	public function createInAppPayment(string $title, $amount, ?string $merchOrderId = null): InAppOrderResult
+	public function createInAppPayment(string $title, $amount, ?string $merchOrderId = null, ?string $payerPhone = null): InAppOrderResult
 	{
 		// Resolve the id up-front (generate if null, throw if invalid) so we can
 		// report back the EXACT value Telebirr will use.
 		$merchOrderId = ParameterValidator::validateMerchantOrderId($merchOrderId, false);
 
 		$fabricToken = $this->getFabricToken();
-		$order = $this->createInAppOrder($fabricToken, $title, $amount, $merchOrderId);
+		$order = $this->createInAppOrder($fabricToken, $title, $amount, $merchOrderId, $payerPhone);
 		$biz = $order['biz_content'];
 		$prepayId = isset($biz['prepay_id']) && $biz['prepay_id'] !== '' ? (string) $biz['prepay_id'] : null;
 
@@ -735,7 +745,7 @@ class Telebirr
 	/**
 	 * Internal: build preOrder request body per requestCreateOrder spec.
 	 */
-	private function buildPreOrderRequest(string $title, string $amount, string $merchOrderId): array
+	private function buildPreOrderRequest(string $title, string $amount, string $merchOrderId, ?string $payerPhone = null): array
 	{
 		$req = [
 			'timestamp' => Signer::createTimeStamp(),
@@ -754,7 +764,14 @@ class Telebirr
 			'total_amount'    => $amount,
 			'trans_currency'  => 'ETB',
 			'timeout_express' => '120m',
+			// Who receives the money: our organization, paid through its short code.
+			'payee_type'            => '3000',
+			'payee_identifier'      => $this->config->merchantCode,
+			'payee_identifier_type' => '04',
 		];
+
+		// Who pays: the customer's telebirr account, when the caller knows it.
+		$this->addPayerFields($biz, $payerPhone);
 
 		if ($this->config->redirectUrl !== null && !empty($this->config->redirectUrl)) {
 			$biz['redirect_url'] = $this->config->redirectUrl;
@@ -771,7 +788,7 @@ class Telebirr
 	/**
 	 * Internal: build the In-App SDK createOrder request body (trade_type "Cross-App").
 	 */
-	private function buildInAppOrderRequest(string $title, string $amount, string $merchOrderId): array
+	private function buildInAppOrderRequest(string $title, string $amount, string $merchOrderId, ?string $payerPhone = null): array
 	{
 		$req = [
 			'timestamp' => Signer::createTimeStamp(),
@@ -793,7 +810,14 @@ class Telebirr
 			'total_amount'    => $amount,
 			'trans_currency'  => 'ETB',
 			'timeout_express' => '120m',
+			// Who receives the money: our organization, paid through its short code.
+			'payee_type'            => '3000',
+			'payee_identifier'      => $this->config->merchantCode,
+			'payee_identifier_type' => '04',
 		];
+
+		// Who pays: the customer's telebirr account, when the caller knows it.
+		$this->addPayerFields($biz, $payerPhone);
 
 		$req['biz_content'] = $biz;
 
@@ -801,6 +825,19 @@ class Telebirr
 		$req['sign_type'] = 'SHA256WithRSA';
 
 		return $req;
+	}
+
+	/**
+	 * Internal: add payer_type / payer_identifier / payer_identifier_type when a phone is known.
+	 */
+	private function addPayerFields(array &$biz, ?string $payerPhone): void
+	{
+		if ($payerPhone === null || $payerPhone === '') {
+			return;
+		}
+		$biz['payer_type']            = '1000';
+		$biz['payer_identifier']      = $payerPhone;
+		$biz['payer_identifier_type'] = '01';
 	}
 
 	/**
@@ -1023,7 +1060,7 @@ class Telebirr
 	{
 		$sensitive = [
 			'sign', 'msisdn', 'phone', 'phone_no', 'phonenumber', 'payer_name',
-			'customer_name', 'buyer', 'openid', 'open_id', 'id_no', 'email',
+			'customer_name', 'buyer', 'openid', 'open_id', 'id_no', 'email', 'payer_identifier',
 		];
 
 		foreach ($data as $key => $value) {
